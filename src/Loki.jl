@@ -18,5 +18,6 @@ import MLJModelInterface
 using PrecompileTools: @setup_workload, @compile_workload
 
 include("acausal.jl")
+include("precompile.jl")
 
 end
