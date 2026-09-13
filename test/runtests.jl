@@ -5,7 +5,10 @@ using Test
 
 @testset "Loki.jl" begin
     @testset "Aqua" begin
-        Aqua.test_all(Loki)
+        # The persistent-tasks check resolves Loki in a fresh environment, which
+        # finds the unregistered CausalFrames only through [sources] — and Julia
+        # 1.10 ignores [sources]. 1.11+ still runs it.
+        Aqua.test_all(Loki; persistent_tasks = VERSION >= v"1.11")
     end
 
     @testset "dependencies" begin

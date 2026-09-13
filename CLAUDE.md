@@ -35,7 +35,8 @@ Milestone 0 (package scaffolding) is done, Milestone 1 is next.
 CausalFrames (`../CausalFrames`, github.com/farrellm/CausalFrames.jl) is not
 registered. `Project.toml` names it in `[sources]` by URL, which Julia 1.11+
 reads; Julia 1.10 ignores `[sources]`, so the 1.10 CI job runs
-`Pkg.add(url=…)` before building. To work against a local CausalFrames
+`Pkg.add(url=…)` before building. Aqua's persistent-tasks check resolves Loki
+in a fresh environment that step can't reach, so it is skipped on 1.10. To work against a local CausalFrames
 checkout, `Pkg.develop(path="../CausalFrames")` (this only touches the
 gitignored Manifest).
 
