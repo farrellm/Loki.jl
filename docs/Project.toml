@@ -1,0 +1,11 @@
+[deps]
+CausalFrames = "388faf74-d151-4224-8c39-96f47ad15296"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Loki = "9b5ade9f-1edb-4545-b895-09cd44c1a3d9"
+
+[sources]
+CausalFrames = {url = "https://github.com/farrellm/CausalFrames.jl"}
+Loki = {path = ".."}
+
+[compat]
+Documenter = "1.17.0"
