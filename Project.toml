@@ -16,15 +16,20 @@ PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 CausalFrames = {url = "https://github.com/farrellm/CausalFrames.jl"}
 
 [compat]
+Aqua = "0.8"
 CausalFrames = "1"
 DuckDB = "1.5.2"
+JET = "0.9, 0.10, 0.11, 0.12"
 MLJModelInterface = "1.12"
 Parquet2 = "0.2.33"
 PrecompileTools = "1.2"
+Test = "1.10"
 julia = "1.10"
 
 [extras]
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Aqua", "JET", "Test"]
