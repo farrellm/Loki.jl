@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || exit 0\nerr=$(git ls-files -z -mo --exclude-standard -- '*.jl' 2>/dev/null | xargs -0 -r julia -e 'using JuliaFormatter; foreach(format, ARGS)' -- 2>&1 >/dev/null) || true\n[ -z \"$err\" ] || { printf 'JuliaFormatter: %s\\n' \"$err\" >&2; exit 1; }\nexit 0",
+            "timeout": 120,
+            "statusMessage": "Formatting Julia"
+          }
+        ]
+      }
+    ]
+  }
+}

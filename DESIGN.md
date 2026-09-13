@@ -792,6 +792,11 @@ MLJModelInterface runs in its light mode without MLJBase, so an MLJ node needs
 `using MLJ` and the model's package in the session, and the node kind says so
 when they are absent.
 
+CausalFrames is not registered. Until it is, `Project.toml` names it in
+`[sources]` by URL, which Julia 1.11 and later read; Julia 1.10 does not, so
+its CI job adds CausalFrames by URL before building. The Manifest stays out of
+version control.
+
 Package infrastructure follows CausalFrames: Julia 1.10 as the minimum
 (StateSpaceModels and ModelContextProtocol both support it), `test/` with Aqua
 and targeted JET checks, a Documenter site, JuliaFormatter, and this file as the
@@ -829,6 +834,8 @@ source of truth for the design.
 
 ## Milestones
 
+0. Package scaffolding: dependencies, the module skeleton, the Aqua and JET
+   test harness, formatting, the Documenter site, and CI.
 1. Loki's time-series operators, `insample`, the fit node's two ports, the
    graph, and the engine — usable headless from the REPL.
 2. Export and persistence.
@@ -843,9 +850,6 @@ source of truth for the design.
   system matrices publicly, `FittedARMA` rebuilds them from the hyperparameters;
   the differential test covers either path. It also remains to confirm that
   StateSpaceModels treats `NaN` observations as missing.
-- **Depending on CausalFrames.** CausalFrames is not registered, and Julia 1.10
-  does not read `[sources]` from a Project.toml. The options are a personal
-  registry, registering CausalFrames, or a Manifest pinned to its URL.
 - **ModelContextProtocol.jl alongside HTTP.jl.** Whether `start!` blocks, and on
   which thread its handlers run next to `HTTP.serve!`, is to be confirmed at
   implementation; the command-layer lock is the design's answer either way.
