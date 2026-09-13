@@ -1,10 +1,27 @@
 name = "Loki"
 uuid = "9b5ade9f-1edb-4545-b895-09cd44c1a3d9"
-authors = ["Matthew Farrell <farrellm@alum.mit.edu> and contributors"]
 version = "1.0.0-DEV"
+authors = ["Matthew Farrell <farrellm@alum.mit.edu> and contributors"]
+
+[deps]
+CausalFrames = "388faf74-d151-4224-8c39-96f47ad15296"
+DuckDB = "d2f5444f-75bc-4fdf-ac35-56f514c445e1"
+MLJModelInterface = "e80e1ace-859a-464e-9ed9-23947d8ae3ea"
+Parquet2 = "98572fba-bba0-415d-956f-fa77e587d26d"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+
+# CausalFrames is unregistered. Julia 1.11+ reads this; the 1.10 CI job adds it
+# by URL before building (see .github/workflows/CI.yml).
+[sources]
+CausalFrames = {url = "https://github.com/farrellm/CausalFrames.jl"}
 
 [compat]
-julia = "1.10.10"
+CausalFrames = "1"
+DuckDB = "1.5.2"
+MLJModelInterface = "1.12"
+Parquet2 = "0.2.33"
+PrecompileTools = "1.2"
+julia = "1.10"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
