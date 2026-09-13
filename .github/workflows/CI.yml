@@ -19,6 +19,7 @@ jobs:
     permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
       actions: write
       contents: read
+      id-token: write # lets codecov-action authenticate the upload via OIDC
     strategy:
       fail-fast: false
       matrix:
@@ -31,11 +32,60 @@ jobs:
         arch:
           - x64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
+      # CausalFrames is unregistered. Julia 1.11+ finds it through [sources] in
+      # Project.toml; 1.10 ignores [sources], so add it by URL first.
+      - name: Add CausalFrames by URL (Julia 1.10)
+        if: matrix.version == '1.10'
+        run: julia --project -e 'using Pkg; Pkg.add(url = "https://github.com/farrellm/CausalFrames.jl")'
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        with:
+          # JET's latest (0.10+) drops Julia 1.10, so on the floor job we let
+          # the resolver pick JET's newest 1.10-compatible version instead of
+          # forcing latest, which is unsatisfiable on 1.10 and fails to resolve.
+          # 1.12/pre keep 'auto', still exercising the newest JET.
+          force_latest_compatible_version: ${{ matrix.version == '1.10' && 'false' || 'auto' }}
+      - uses: julia-actions/julia-processcoverage@v1
+      - uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          use_oidc: true
+          fail_ci_if_error: false
+  format:
+    name: Format check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write   # let the action post reviewdog suggestions on PRs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/julia-format@v4
+        with:
+          # JuliaFormatter v1 formats differently and would reject the
+          # v2-formatted tree.
+          version: '2'
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-docdeploy@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
