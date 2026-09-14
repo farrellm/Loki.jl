@@ -15,5 +15,9 @@
         load(ctx,
             readtable(table) |> lags(:x, 2) |> difference(:x) |> logtransform(:x) |>
             boxcox(:x; lambda = 0.5))
+        load(ctx,
+            readtable(table) |> ema(:x; span = 3) |> ema(:x; halflife = 2) |>
+            macd(:x; fast = 2, slow = 3, signal = 2))
+        load(ctx, readtable(table) |> ar(:x, 1))
     end
 end

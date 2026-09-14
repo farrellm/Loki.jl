@@ -17,7 +17,9 @@ using Parquet2: Parquet2
 import MLJModelInterface
 using PrecompileTools: @setup_workload, @compile_workload
 
-export Lags, lags, difference, logtransform, boxcox
+using Dates: Dates
+
+export Lags, EMA, lags, difference, logtransform, boxcox, ema, macd, ar
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")

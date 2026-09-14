@@ -13,4 +13,8 @@ lags
 difference
 logtransform
 boxcox
+EMA
+ema
+macd
+ar
 ```

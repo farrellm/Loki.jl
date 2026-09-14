@@ -204,9 +204,12 @@ seeded with the first value. `EMA(:x; halflife)` is the time-aware form for
 irregular series, `α = 1 - exp(-ln 2 · Δt / halflife)` with `Δt` the time since
 the previous row (read from `row.time`); for `DateTime` the difference is a
 `Millisecond` and the half-life is converted to one, for numeric time types it
-is plain division. A `missing` value leaves the state unchanged and emits the
-current average. The output is `x_ema_{span}` (or `name`). `ema(:x; …)` is the
-`addsummarycolumns` wrapper.
+is plain division. Exactly one of `span` and `halflife` is given, and each form
+is its own state type, so neither pays for the other's branch. A `missing` value
+leaves the state unchanged and emits the current average. The output is
+`x_ema_{span}`, or `x_ema_hl_{halflife}` (`x_ema_hl_5minute` for `Minute(5)`),
+or `name`; its element type is `Union{Missing, Float64}`, `missing` until the
+first value. `ema(:x; …)` is the `addsummarycolumns` wrapper.
 
 `EMA` is a plain `Summarizer`: it is neither combinable nor invertible, and
 rolling windows are not how it is used.
@@ -233,7 +236,7 @@ An AR(p) fit is CausalFrames' own `LinearRegression` over row lags —
 `missing` predictor would poison the fit rather than be skipped), and then
 `summarize(LinearRegression([:x_lag_1, …, :x_lag_p], :x; name = :ar))` for one
 fit, or `addrollingcolumns` for rolling coefficients that are causal row by row.
-The composite `ar(:x, p; key)` is the node kind for this; it shares
+The composite `ar(:x, p; key, name = :ar)` is the node kind for this; it shares
 accumulators with any `Variance` or `Correlation` over the same columns, as
 `LinearRegression` always does.
 

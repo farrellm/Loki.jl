@@ -5,6 +5,7 @@ authors = ["Matthew Farrell <farrellm@alum.mit.edu> and contributors"]
 
 [deps]
 CausalFrames = "388faf74-d151-4224-8c39-96f47ad15296"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 DuckDB = "d2f5444f-75bc-4fdf-ac35-56f514c445e1"
 MLJModelInterface = "e80e1ace-859a-464e-9ed9-23947d8ae3ea"
 Parquet2 = "98572fba-bba0-415d-956f-fa77e587d26d"
@@ -19,6 +20,7 @@ CausalFrames = {url = "https://github.com/farrellm/CausalFrames.jl"}
 Aqua = "0.8"
 CausalFrames = "1"
 DataFrames = "1.8"
+Dates = "1.10"
 DuckDB = "1.5.2"
 JET = "0.9, 0.10, 0.11, 0.12"
 MLJModelInterface = "1.12"

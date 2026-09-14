@@ -23,5 +23,22 @@ using JET
         JET.@test_opt f(row)
         JET.@test_opt Loki.LogRow{:x,:x_log}()(row)
         JET.@test_opt Loki.BoxCoxRow{:x,:x_boxcox}(0.5)(row)
+        mrow = (time = 1, x = 2.0, macd = missing, macd_signal = 1.0)
+        JET.@test_opt Loki.ColumnDiff{:macd,:macd_signal,:macd_hist}()(mrow)
+        JET.@test_opt Loki.CompleteRows{(:x, :macd)}()(mrow)
+    end
+
+    @testset "EMA" begin
+        for e in (EMA(:x; span = 5), EMA(:x; halflife = 2))
+            st = CausalFrames.fresh(e, (time = Int, x = Float64))
+            JET.@test_opt CausalFrames.update!(st, (time = 3, x = 1.5))
+            JET.@test_opt CausalFrames.value(st)
+        end
+        st = CausalFrames.fresh(EMA(:x; halflife = Dates.Minute(2)),
+            (time = Dates.DateTime, x = Union{Missing,Int}))
+        for x in (missing, 4)
+            JET.@test_opt CausalFrames.update!(st, (time = Dates.DateTime(2020), x = x))
+        end
+        JET.@test_opt CausalFrames.value(st)
     end
 end

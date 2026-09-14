@@ -111,3 +111,88 @@ end
 boxcoxvalue(::Missing, ::Float64) = missing
 boxcoxvalue(x::Real, lambda::Float64) =
     iszero(lambda) ? log(float(x)) : (float(x)^lambda - 1) / lambda
+
+# --- moving averages -------------------------------------------------------------
+
+"""
+    ema(column::Symbol; span = nothing, halflife = nothing, name = nothing,
+        key = nothing) -> (CausalPipeline -> CausalPipeline)
+    ema(pipeline::CausalPipeline, column::Symbol; ...) -> CausalPipeline
+
+A transform appending the exponential moving average of `column`:
+`addsummarycolumns` of [`EMA`](@ref), whose keywords it takes. With `key`, each
+key has its own average.
+"""
+ema(column::Symbol; key = nothing, kwargs...) =
+    addsummarycolumns(EMA(column; kwargs...); key)
+ema(pipeline::CausalPipeline, column::Symbol; kwargs...) = ema(column; kwargs...)(pipeline)
+
+"""
+    macd(column::Symbol; fast = 12, slow = 26, signal = 9, name = :macd,
+         key = nothing) -> (CausalPipeline -> CausalPipeline)
+    macd(pipeline::CausalPipeline, column::Symbol; ...) -> CausalPipeline
+
+A transform appending the moving average convergence/divergence of `column`:
+`macd`, the `fast`-span minus the `slow`-span [`EMA`](@ref); `macd_signal`, the
+`signal`-span EMA of `macd`; and `macd_hist`, their difference. `name` replaces
+the `macd` prefix. With `key`, every average is kept per key.
+"""
+function macd(column::Symbol; fast::Integer = 12, slow::Integer = 26,
+    signal::Integer = 9, name::Symbol = :macd, key = nothing)
+    1 <= fast < slow || throw(
+        ArgumentError("macd needs 1 <= fast < slow, got fast = $fast, slow = $slow"))
+    signal >= 1 || throw(ArgumentError("macd needs signal >= 1, got $signal"))
+    fastname = Symbol("#", name, :_fast)
+    slowname = Symbol("#", name, :_slow)
+    signalname = Symbol(name, :_signal)
+    return function (p::CausalPipeline)
+        return p |>
+               addsummarycolumns(
+                   [EMA(column; span = fast, name = fastname),
+                       EMA(column; span = slow, name = slowname)]; key) |>
+               addcolumns(ColumnDiff{fastname,slowname,name}()) |>
+               addsummarycolumns(EMA(name; span = signal, name = signalname); key) |>
+               addcolumns(ColumnDiff{name,signalname,Symbol(name, :_hist)}()) |>
+               dropcolumns(fastname, slowname)
+    end
+end
+macd(pipeline::CausalPipeline, column::Symbol; kwargs...) =
+    macd(column; kwargs...)(pipeline)
+
+struct ColumnDiff{A,B,O} end
+@inline (::ColumnDiff{A,B,O})(row) where {A,B,O} =
+    NamedTuple{(O,)}((getproperty(row, A) - getproperty(row, B),))
+
+# --- autoregression ----------------------------------------------------------------
+
+"""
+    ar(column::Symbol, p::Integer; key = nothing, name = :ar)
+        -> (CausalPipeline -> CausalPipeline)
+    ar(pipeline::CausalPipeline, column::Symbol, p::Integer; ...) -> CausalPipeline
+
+A transform fitting an AR(`p`) model of `column` by least squares over the
+whole window: [`lags`](@ref), dropping the rows without a complete history,
+then `summarize` of CausalFrames' `LinearRegression` of `column` on
+`x_lag_1, …, x_lag_p`, with an intercept. One row per key is emitted at the
+window's `stop`; its columns are the regression's, prefixed by `name`
+(`ar_intercept_beta`, `ar_x_lag_1_beta`, …, `ar_r2`, `ar_n`).
+
+Because it is a `LinearRegression`, it shares accumulators with a `Variance` or
+`Correlation` over the same columns in the same `summarize`.
+"""
+function ar(column::Symbol, p::Integer; key = nothing, name::Symbol = :ar)
+    p >= 1 || throw(ArgumentError("ar needs p >= 1, got $p"))
+    lagcols = lagnames(Symbol(column, :_lag), p)
+    fit = LinearRegression(collect(lagcols), column; name)
+    return function (pipeline::CausalPipeline)
+        return pipeline |> lags(column, p; key) |>
+               filterrows(CompleteRows{(column, lagcols...)}()) |> summarize(fit; key)
+    end
+end
+ar(pipeline::CausalPipeline, column::Symbol, p::Integer; kwargs...) =
+    ar(column, p; kwargs...)(pipeline)
+
+# A row predicate: no `missing` in any of the columns `Cols`.
+struct CompleteRows{Cols} end
+@inline (::CompleteRows{Cols})(row) where {Cols} =
+    !any(ismissing, map(c -> getproperty(row, c), Cols))
