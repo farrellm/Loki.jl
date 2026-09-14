@@ -18,3 +18,15 @@ ema
 macd
 ar
 ```
+
+## ARMA
+
+```@docs
+FitARMA
+FittedARMA
+ARMAFilter
+fitarma
+applyarma
+arma
+fitonce
+```

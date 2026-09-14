@@ -41,4 +41,18 @@ using JET
         end
         JET.@test_opt CausalFrames.value(st)
     end
+
+    @testset "ARMA" begin
+        fm = fitone(sin.(1:80) .+ 0.1 .* cos.((1:80) .^ 2), (1, 1, 1))
+        intypes =
+            (time = Int, y = Union{Missing,Float64}, model = Union{Missing,FittedARMA})
+        R = NamedTuple{keys(intypes),Tuple{values(intypes)...}}
+        st = CausalFrames.fresh(ARMAFilter(:y; horizon = 2), intypes)
+        for row in (R((1, 1.0, fm)), R((2, missing, fm)), R((3, 1.0, missing)))
+            JET.@test_opt CausalFrames.update!(st, row)
+            JET.@test_opt CausalFrames.value(st)
+        end
+        fst = CausalFrames.fresh(FitARMA(:y; order = (1, 0, 0)), intypes)
+        JET.@test_opt CausalFrames.update!(fst, R((1, missing, fm)))
+    end
 end

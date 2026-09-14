@@ -250,7 +250,17 @@ buffers `:x` in a `Vector{Float64}` (`missing` stored as `NaN`), `fresh!` emptie
 the buffer keeping its capacity, and `value` builds
 `SARIMA(y; order, seasonal_order, include_mean)`, calls `fit!`, and emits a
 `FittedARMA`: the fitted model, its hyperparameters by name (`get_names`), the
-information criteria, the number of observations, and a status. A fit that
+information criteria, the number of observations, a status, and — computed once
+per fit — the state-space system the filter steps (`Z`, `T`, `RQR`, `c`, `d`,
+`H`) with its initial state (`a1`, `P1`). The system is read from the fitted
+`SARIMA`'s `system` field, an exported `LinearUnivariateTimeInvariant`, and the
+criteria from its `results`. The initial covariance is StateSpaceModels' own
+SARIMA initialization: diffuse (`1e6·I`) differencing states, and the ARMA
+block's stationary covariance `Q · lyapd(T, R R')` from MatrixEquations.
+StateSpaceModels skips a `NaN` observation in the likelihood, which is what the
+buffer's `missing`-as-`NaN` relies on. A fit whose likelihood is not finite is
+`:failed` too, and so is a series with no observations at all, which
+StateSpaceModels would otherwise "fit". A fit that
 throws — too few observations, a failed optimization — emits a `FittedARMA`
 with `status = :failed` and the message rather than raising: under a rolling
 refit one bad window must not end the run, which is `LinearRegression`'s `NaN`
@@ -278,17 +288,27 @@ fresh filter would be; a `missing` or failed model emits `missing` and keeps no
 state. A `NaN` observation is skipped by the filter (prediction without update)
 and emits `missing` residuals.
 
-Re-running `kalman_filter` over a hyperparameter-fixed copy of the model for
-each row would be quadratic in the window. The per-row step is O(state²) per
-row, and its correctness is pinned by a differential test against
-StateSpaceModels' own `kalman_filter`, `get_innovations` and
-`get_innovations_variance` on a model with `fix_hyperparameters!`.
+Re-running `kalman_filter` over a copy of the model for each row would be
+quadratic in the window. The per-row step is one allocation-free Joseph-form
+update over the fitted system — O(state³) per row, the recursions
+StateSpaceModels uses — and it is **exact**. StateSpaceModels' filter stops
+updating the covariance once it looks steady, which is cheaper but leaves the
+innovation variance stale after a gap (it keeps the post-gap variance until the
+tolerance trips again), so `ARMAFilter` takes no such shortcut. Its correctness
+is pinned by a differential test against StateSpaceModels' own `kalman_filter`,
+`get_innovations` and `get_innovations_variance`, run with the fitted
+hyperparameters and the steady-state tolerance disabled. `fix_hyperparameters!`
+is not the route to that model: one with every hyperparameter fixed cannot be
+`fit!`, and `kalman_filter` refuses an unfitted one, so the test copies the
+fitted hyperparameters instead, as StateSpaceModels' `forecast` does.
 
 The operators built from the two:
 
 - `fitarma(:x; order, …, key)` is `summarize(FitARMA(...); key)` — one model per
   key at the window's `stop`.
-- `applyarma(models; column = :model, key, tolerance, strict = false)` is
+- `applyarma(models, :x; column = :model, key, tolerance, strict = false, horizon = 0, name = :x)`
+  — the series is positional because the filter carries it as a type
+  parameter — is
   `asofjoin` of the models pipeline (narrowed to its model and key columns)
   followed by `addsummarycolumns(ARMAFilter(...); key)` and the model column
   dropped — `applymodels`' composition, with the as-of store supplying the
@@ -786,9 +806,11 @@ Dependencies: CausalFrames, **with all of its optional dependencies taken as
 hard dependencies** — DuckDB, Parquet2 and MLJModelInterface — so loading Loki
 loads CausalFrames' three extensions and every operator in the catalog is
 available without the user knowing which package enables it. Also
-StateSpaceModels, ModelContextProtocol, HTTP, JSON3, DataFrames, Tables,
-StatsBase, HypothesisTests, PrecompileTools, and the `Dates` and
-`Serialization` stdlibs.
+StateSpaceModels (with MatrixEquations, already its dependency, for the filter's
+initial covariance), ModelContextProtocol, HTTP, JSON3, DataFrames, Tables,
+StatsBase, HypothesisTests, PrecompileTools, and the `Dates`, `LinearAlgebra`
+and `Serialization` stdlibs. StateSpaceModels is imported as a module alias
+(`SSM`), never `using`'d: its `LinearRegression` clashes with CausalFrames'.
 
 The consequences are deliberate. Load time is higher than CausalFrames' own,
 which is the price of an application rather than a library. The precompile
@@ -816,8 +838,9 @@ source of truth for the design.
   reference values; `ar` against a direct least-squares fit.
 - **ARMA.** `FitARMA` against `SARIMA` + `fit!` called directly. `ARMAFilter`
   differentially against `kalman_filter`, `get_innovations` and
-  `get_innovations_variance` on hyperparameter-fixed models, including `NaN`
-  observations and a model change mid-stream. `insample` residuals against the
+  `get_innovations_variance` with the fitted hyperparameters and the
+  steady-state shortcut disabled, including `NaN` observations and a model
+  change mid-stream; forecasts against `forecast`. `insample` residuals against the
   same reference.
 - **Engine.** Cached and uncached evaluation give equal frames for every
   operator family, including the widening and stateful ones; error tags land on
@@ -851,11 +874,6 @@ source of truth for the design.
 
 ## Open questions
 
-- **The filter's system matrices.** `ARMAFilter` steps a Kalman filter over the
-  fitted model's state-space system. If StateSpaceModels does not expose the
-  system matrices publicly, `FittedARMA` rebuilds them from the hyperparameters;
-  the differential test covers either path. It also remains to confirm that
-  StateSpaceModels treats `NaN` observations as missing.
 - **ModelContextProtocol.jl alongside HTTP.jl.** Whether `start!` blocks, and on
   which thread its handlers run next to `HTTP.serve!`, is to be confirmed at
   implementation; the command-layer lock is the design's answer either way.

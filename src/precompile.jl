@@ -19,5 +19,13 @@
             readtable(table) |> ema(:x; span = 3) |> ema(:x; halflife = 2) |>
             macd(:x; fast = 2, slow = 3, signal = 2))
         load(ctx, readtable(table) |> ar(:x, 1))
+
+        # An ARMA fit and filter: the first `fit!` otherwise costs a user many
+        # seconds of compilation.
+        series = (time = collect(1:40), y = sin.(1:40) .+ 0.1 .* cos.((1:40) .^ 2))
+        src = readtable(series)
+        models = src |> fitonce(Context(0, 21), FitARMA(:y; order = (1, 0, 1)))
+        load(Context(0, 41), src |> applyarma(models, :y; horizon = 1))
+        load(Context(0, 41), src |> arma(clock(10), 20, :y; order = (1, 0, 0)))
     end
 end

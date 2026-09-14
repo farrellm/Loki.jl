@@ -19,7 +19,14 @@ using PrecompileTools: @setup_workload, @compile_workload
 
 using Dates: Dates
 
-export Lags, EMA, lags, difference, logtransform, boxcox, ema, macd, ar
+using LinearAlgebra: I, dot, mul!
+using MatrixEquations: lyapd
+# Imported as a module: StateSpaceModels exports a `LinearRegression` that would
+# clash with CausalFrames'.
+import StateSpaceModels as SSM
+
+export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
+    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")

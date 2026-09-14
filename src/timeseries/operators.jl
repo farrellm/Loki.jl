@@ -196,3 +196,122 @@ ar(pipeline::CausalPipeline, column::Symbol, p::Integer; kwargs...) =
 struct CompleteRows{Cols} end
 @inline (::CompleteRows{Cols})(row) where {Cols} =
     !any(ismissing, map(c -> getproperty(row, c), Cols))
+
+# --- ARMA ------------------------------------------------------------------------
+
+"""
+    fitarma(column::Symbol; order, seasonal_order = (0, 0, 0, 0),
+            include_mean = false, name = :model, key = nothing)
+        -> (CausalPipeline -> CausalPipeline)
+    fitarma(pipeline::CausalPipeline, column::Symbol; ...) -> CausalPipeline
+
+A transform fitting one seasonal ARIMA model of `column` per key over the whole
+window: `summarize` of [`FitARMA`](@ref), whose keywords it takes, emitting a
+[`FittedARMA`](@ref) in the column `name` at the window's `stop`.
+"""
+fitarma(column::Symbol; key = nothing, kwargs...) =
+    summarize(FitARMA(column; kwargs...); key)
+fitarma(pipeline::CausalPipeline, column::Symbol; kwargs...) =
+    fitarma(column; kwargs...)(pipeline)
+
+"""
+    applyarma(models::CausalPipeline, x::Symbol; column = :model, key = nothing,
+              tolerance = nothing, strict = false, horizon = 0, name = x)
+        -> (CausalPipeline -> CausalPipeline)
+    applyarma(pipeline::CausalPipeline, models::CausalPipeline, x::Symbol; ...)
+        -> CausalPipeline
+
+A transform filtering the series `x` with fitted ARIMA models. `models` is a
+pipeline whose `column` holds [`FittedARMA`](@ref)s — the output of
+[`FitARMA`](@ref) under any summarizing transform, of [`fitonce`](@ref), or a
+file of them. Each row is matched to the most recent model row not after it
+(`strict = true`: strictly before) by `asofjoin`, with its `key` and `tolerance`,
+and filtered by [`ARMAFilter`](@ref), appending `x_fitted`, `x_residual`,
+`x_stdresidual` and `horizon` forecasts (named from `name`). The model column
+is dropped. Rows with no model get `missing`.
+
+This is `applymodels`' composition: the as-of store supplies the model and the
+summarizer carries the filter state, restarting whenever the model changes.
+"""
+function applyarma(models::CausalPipeline, x::Symbol; column::Symbol = :model,
+    key = nothing, tolerance = nothing, strict::Bool = false, horizon::Integer = 0,
+    name::Symbol = x)
+    filter = ARMAFilter(x; model = column, horizon, name)
+    keycols = tokeys(key)
+    column in keycols &&
+        throw(ArgumentError("applyarma model column $column may not be a key column"))
+    # Predicates, unlike names, do not fail on an absent column: a models stream
+    # with no rows reaches the filter without one, which then emits `missing`.
+    right = models |> selectcolumns(n -> Symbol(n) === column || Symbol(n) in keycols)
+    return function (p::CausalPipeline)
+        return p |> asofjoin(right; key, tolerance, strict) |>
+               addsummarycolumns(filter; key) |> dropcolumns(n -> Symbol(n) === column)
+    end
+end
+applyarma(pipeline::CausalPipeline, models::CausalPipeline, x::Symbol; kwargs...) =
+    applyarma(models, x; kwargs...)(pipeline)
+
+tokeys(::Nothing) = Symbol[]
+tokeys(k::Union{Symbol,AbstractString}) = Symbol[Symbol(k)]
+tokeys(ks) = Symbol[Symbol(k) for k in ks]
+
+"""
+    arma(clock::CausalPipeline, lookback, x::Symbol; order,
+         seasonal_order = (0, 0, 0, 0), include_mean = false, key = nothing,
+         horizon = 0, name = x) -> (CausalPipeline -> CausalPipeline)
+    arma(pipeline::CausalPipeline, clock::CausalPipeline, lookback, x::Symbol; ...)
+        -> CausalPipeline
+
+A transform filtering `x` with a seasonal ARIMA model refit on a rolling window.
+At every tick `τ` of `clock` a model is fit over the rows in `[τ - lookback, τ)`
+(`summarizewindows` of [`FitARMA`](@ref)), and each row from `τ` until the next
+tick is filtered by it ([`applyarma`](@ref)), appending the same columns. The
+windows are half-open, so every row is filtered by a model fit only on rows
+before it. Rows before the first fitted tick, and a key with no rows in the
+latest window, get `missing`. The pipeline runs twice, once to fit and once to
+filter, as a self-join does.
+"""
+function arma(clk::CausalPipeline, lookback, x::Symbol; order,
+    seasonal_order = (0, 0, 0, 0), include_mean::Bool = false, key = nothing,
+    horizon::Integer = 0, name::Symbol = x)
+    modelcol = Symbol("#", x, :_armamodel)
+    fits = summarizewindows(clk, lookback,
+        FitARMA(x; order, seasonal_order, include_mean, name = modelcol); key)
+    return function (p::CausalPipeline)
+        return p |> applyarma(p |> fits, x; column = modelcol, key, horizon, name)
+    end
+end
+arma(pipeline::CausalPipeline, clk::CausalPipeline, lookback, x::Symbol; kwargs...) =
+    arma(clk, lookback, x; kwargs...)(pipeline)
+
+# --- fitting over another context --------------------------------------------------
+
+"""
+    fitonce(trainctx::Context, s::Summarizer; key = nothing)
+        -> (CausalPipeline -> CausalPipeline)
+    fitonce(pipeline::CausalPipeline, trainctx::Context, s::Summarizer; ...)
+        -> CausalPipeline
+
+A transform fitting once over a fixed training window. Whatever context it runs
+over, it loads `pipeline |> summarize(s; key)` over `trainctx` and yields the
+model rows — timed at `trainctx.stop` — that fall inside the run's context.
+
+That timing is what makes it causal: applied over a window overlapping
+`trainctx`, the rows before `trainctx.stop` get no model rather than one fit on
+their own future. To apply the model to a later window, `applyarma`'s (or
+`applymodels`') `tolerance` widens the models' context back to it. The fit is
+loaded on every run.
+"""
+function fitonce(trainctx::Context, s::Summarizer; key = nothing)
+    return function (p::CausalPipeline)
+        fit = p |> summarize(s; key)
+        return CausalPipeline() do ctx::Context
+            frame = load(trainctx, fit)
+            # One of Loki's recorded reads of a pipeline's `run` field: the
+            # fitted frame is served as this pipeline's source.
+            return readtable(frame; checkcontext = false).run(ctx)
+        end
+    end
+end
+fitonce(pipeline::CausalPipeline, trainctx::Context, s::Summarizer; kwargs...) =
+    fitonce(trainctx, s; kwargs...)(pipeline)
