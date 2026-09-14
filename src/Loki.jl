@@ -19,6 +19,7 @@ using PrecompileTools: @setup_workload, @compile_workload
 
 using Dates: Dates
 using Statistics: Statistics
+using DataFrames: DataFrame, nrow
 
 using LinearAlgebra: I, dot, mul!
 using MatrixEquations: lyapd
@@ -37,6 +38,9 @@ include("graph.jl")
 include("usercode.jl")
 include("nodes/causalframes.jl")
 include("nodes/timeseries.jl")
+include("compile.jl")
+include("engine.jl")
+include("session.jl")
 include("precompile.jl")
 
 end

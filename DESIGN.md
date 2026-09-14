@@ -60,8 +60,9 @@ Three CausalFrames facilities carry most of the weight:
 
 Loki reads the `run` field of a `CausalPipeline` to wrap one (`tagged`,
 `cachedsource`) or to serve, from its own `run`, a pipeline built from a frame
-it has just materialized (`fitonce`, `insample`). The field is the documented
-shape of the type, but an accessor would make that dependence explicit.
+it has just materialized (`fitonce`, `insample`), and the engine drains a run's
+chunks from it directly. The field is the documented shape of the type, but an
+accessor would make that dependence explicit.
 `applyfit` and `fitinput` also read CausalFrames' fitting summarizers: the type
 parameters of `LinearRegression{P,Y}` and `FitModel{N,P,Y,M}` (predictors,
 response, model column) and `LinearRegression`'s `intercept` and `name` fields,
@@ -127,6 +128,13 @@ code module, the result cache, the current run, and the event subscribers
 (browser sockets and the MCP server). Every mutation, from either side, goes
 through the session's command layer under one lock and is broadcast as an event
 (see "Server").
+
+The headless session of Milestone 1 has all of this but the subscribers and
+events: `Session(; tables, contexts, prelude, cachebytes)`; `setcontext!`,
+`addtable!` and `setprelude!`; `addnode!`, `updatenode!`, `removenode!`,
+`connect!` and `disconnect!`, each invalidating the node it touches and
+everything downstream; `run!`, `cancel!`, `write!` and `freeze!`; and `status`,
+`nodeerror`, `result` and `isacausal` to read the outcome back.
 
 ### Named contexts
 
@@ -483,9 +491,11 @@ run.
 ### Compiling
 
 Compiling a node builds its output pipelines from its inputs' pipelines,
-recursively, memoized per node for as long as the node and its ancestors are
-unchanged. Building is cheap — pipelines are lazy values — and is where eager
-parameter errors surface. A node feeding several consumers hands each the same
+recursively, once per run and memoized within it. Building is cheap — pipelines
+are lazy values, and source-text parameters are cached by the user-code module —
+and is where eager parameter errors surface. It happens under the session lock
+as a run starts, so the worker then streams pipeline values that no later edit
+can change. A node feeding several consumers hands each the same
 pipeline value; CausalFrames pipelines can be re-run, so this is correct, but
 an uncached shared ancestor is then *evaluated* once per consumer (the
 self-join precedent). The cache is the answer when that matters.
@@ -504,11 +514,17 @@ end
 ```
 
 so a run reports progress per chunk and can be cancelled between chunks. A new
-run request cancels the one in flight. One CausalFrames caveat applies:
+run request cancels the one in flight. Concretely, `run!(session, targets;
+context, progress)` compiles every target, records build errors, and spawns the
+worker. The worker drains each target's chunks from its pipeline's `run`
+directly, rather than through `stream`, whose per-chunk frames the cache would
+have to copy back out, and assembles them with the public `CausalFrame`
+constructor. A cancelled run caches nothing and leaves its targets `:idle`. One CausalFrames caveat applies:
 abandoning a stream leaves a sink upstream of the cancellation point
 unfinalized. Loki therefore evaluates write nodes (`writecsv`, `writeparquet`,
 `writejls`) only on an explicit "write" command, with `scan`, and never as a
-side effect of watching a downstream node.
+side effect of watching a downstream node: under a run, a write node compiles as
+a pass-through of its input.
 
 **Errors are attributed.** A run-time failure is raised deep inside a lazy
 iterator, far from the node that caused it. Every node's pipelines are wrapped
@@ -516,12 +532,16 @@ in `tagged(p, id)`, a `CausalPipeline` whose iterator catches an exception from
 `iterate`, wraps it as `NodeError(id, exception)` unless it already is one, and
 rethrows. The innermost tag wins, so the error lands on the node that actually
 failed; that node turns red in the canvas and downstream nodes show "blocked".
+A build error — a bad parameter, an unconnected input — is a `NodeError` on its
+node in the same way.
 
 ### Caching
 
-Loaded frames are cached by (node, upstream hash, context), where the upstream
-hash covers the kinds, parameters and user code of the node and all its
-ancestors, so any edit invalidates exactly the node and its descendants.
+Loaded frames are cached by (node, output port, upstream hash, context), where
+the upstream hash covers the kinds, parameters and user code of the node and all
+its ancestors, and the identity of the tables and the values of the contexts
+their parameters name. Any edit therefore invalidates exactly the node and its
+descendants.
 
 When a node is compiled with a cached ancestor, the ancestor's pipeline is
 replaced by `cachedsource(frame, fallback)`: a `CausalPipeline` whose `run(ctx)`
@@ -542,8 +562,8 @@ rule, and both directions matter:
   every rolling operator give different results over a sub-context, which is
   precisely the chunk-concatenation property they lack.
 
-Frames stay in memory under a byte budget, evicting the least recently watched
-first. Frozen outputs (see "In-memory tables") are not cache entries and are
+Frames stay in memory under a byte budget, evicting the least recently used
+first; a frame is sized with `Base.summarysize` when it is stored. Frozen outputs (see "In-memory tables") are not cache entries and are
 never evicted.
 
 ### Schemas

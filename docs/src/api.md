@@ -84,3 +84,22 @@ Loki.ancestors
 Loki.topoorder
 Loki.taint
 ```
+
+## Session and engine
+
+```@docs
+Loki.Session
+Loki.setcontext!
+Loki.addtable!
+Loki.run!
+Loki.Run
+Loki.cancel!
+Loki.status
+Loki.nodeerror
+Loki.result
+Loki.write!
+Loki.freeze!
+Loki.NodeError
+Loki.tagged
+Loki.cachedsource
+```
