@@ -1,7 +1,10 @@
 using Aqua
 using CausalFrames
+using DataFrames
 using Loki
 using Test
+
+include("fixtures.jl")
 
 @testset "Loki.jl" begin
     @testset "Aqua" begin
@@ -24,6 +27,8 @@ using Test
         @test Loki.Acausal isa Module
         @test :Acausal ∉ names(Loki)
     end
+
+    include("lags.jl")
 
     # JET can lag pre-release Julia; the checks are the same on every
     # released version, so skipping them there loses nothing.

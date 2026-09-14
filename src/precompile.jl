@@ -12,5 +12,8 @@
             scan(ctx, readtable(table) |> writeparquet(path; backend))
             load(ctx, readparquet(path; backend))
         end
+        load(ctx,
+            readtable(table) |> lags(:x, 2) |> difference(:x) |> logtransform(:x) |>
+            boxcox(:x; lambda = 0.5))
     end
 end

@@ -169,8 +169,9 @@ the input column (the CausalFrames convention), with `name` to override.
 
 `Lags(:x, p)` is a summarizer whose state is a ring buffer of the last `p + 1`
 values of `:x`, typed from the column; its value is `x_lag_1, …, x_lag_p`, each
-`Union{Missing, T}` because the first rows have no history. `lags(:x, p; key)`
-is `addsummarycolumns(Lags(:x, p); key)`. Because `addsummarycolumns` emits the
+`Union{Missing, T}` because the first rows have no history (`name` replaces the
+`x_lag` prefix). `lags(:x, p; key, name)` is
+`addsummarycolumns(Lags(:x, p; name); key)`. Because `addsummarycolumns` emits the
 summary *after* folding the current row, the buffer's newest entry is `x_t` and
 the lags are read from behind it — causal by construction.
 
@@ -185,14 +186,16 @@ not consulted.
 `difference(:x; order = 1, lag = 1, key)` appends
 `Δₛᵈ xₜ = Σₖ (-1)ᵏ C(d, k) xₜ₋ₖₛ` for `d = order`, `s = lag`: `lags(:x, order * lag)`
 into an `addcolumns` over the binomial weights, with the lag columns dropped
-afterwards. The output is `x_diff` for `(1, 1)` and `x_diff_{order}_{lag}`
-otherwise; it is `missing` for the first `order * lag` rows of each key.
+afterwards. The lags are taken under a private prefix, so an `x_lag_1` the
+input already carries does not collide. The output is `x_diff` for `(1, 1)` and
+`x_diff_{order}_{lag}` otherwise; it is `missing` for the first `order * lag`
+rows of each key.
 
 #### Transforms: `logtransform`, `boxcox`
 
-`addcolumns` wrappers appending `x_log` and `x_boxcox`. `boxcox` takes a fixed
-`λ`: estimating `λ` looks at the whole window, so that lives in diagnostics,
-which can suggest a value to paste in.
+`addcolumns` wrappers appending `x_log` and `x_boxcox`. `boxcox(:x; lambda)`
+takes a fixed `λ`: estimating `λ` looks at the whole window, so that lives in
+diagnostics, which can suggest a value to paste in.
 
 #### Exponential moving average: `EMA` and `ema`
 
