@@ -498,7 +498,9 @@ function kalmanstep!(st::ARMAFilterState, fm::FittedARMA, y)
     Z, T = fm.Z, fm.T
     a, P, att, Ptt, PZ, K = st.a, st.P, st.att, st.Ptt, st.PZ, st.K
     m = length(a)
-    mul!(PZ, P, Z)
+    # BLAS directly rather than `mul!`, whose generic fallback dispatches at run
+    # time on Julia 1.10: this step runs once per row.
+    BLAS.gemv!('N', 1.0, P, Z, 0.0, PZ)
     F = dot(Z, PZ) + fm.H
     fitted = dot(Z, a) + fm.d
     st.fitted = fitted
@@ -516,8 +518,8 @@ function kalmanstep!(st::ARMAFilterState, fm::FittedARMA, y)
         @inbounds for j in 1:m, i in 1:m
             IKZ[i, j] = (i == j) - K[i] * Z[j]
         end
-        mul!(st.scratch, IKZ, P)
-        mul!(Ptt, st.scratch, transpose(IKZ))
+        BLAS.gemm!('N', 'N', 1.0, IKZ, P, 0.0, st.scratch)
+        BLAS.gemm!('N', 'T', 1.0, st.scratch, IKZ, 0.0, Ptt)
         H = fm.H
         if !iszero(H)
             @inbounds for j in 1:m, i in 1:m
@@ -528,10 +530,10 @@ function kalmanstep!(st::ARMAFilterState, fm::FittedARMA, y)
         st.stdresidual = v / sqrt(F)
         st.observed = true
     end
-    mul!(a, T, att)
+    BLAS.gemv!('N', 1.0, T, att, 0.0, a)
     a .+= fm.c
-    mul!(st.scratch, T, Ptt)
-    mul!(P, st.scratch, transpose(T))
+    BLAS.gemm!('N', 'N', 1.0, T, Ptt, 0.0, st.scratch)
+    BLAS.gemm!('N', 'T', 1.0, st.scratch, T, 0.0, P)
     P .+= fm.RQR
     @inbounds for j in 1:m, i in (j+1):m
         s = (P[i, j] + P[j, i]) / 2
@@ -549,7 +551,7 @@ function forecast!(st::ARMAFilterState{C,M,N,H}, fm::FittedARMA) where {C,M,N,H}
     copyto!(fa, st.a)
     for h in 1:H
         if h > 1
-            mul!(fb, fm.T, fa)
+            BLAS.gemv!('N', 1.0, fm.T, fa, 0.0, fb)
             fb .+= fm.c
             fa, fb = fb, fa
         end

@@ -21,7 +21,7 @@ using Dates: Dates
 using Statistics: Statistics
 using DataFrames: DataFrame, nrow
 
-using LinearAlgebra: I, dot, mul!
+using LinearAlgebra: BLAS, I, dot
 using MatrixEquations: lyapd
 # Imported as a module: StateSpaceModels exports a `LinearRegression` that would
 # clash with CausalFrames'.
