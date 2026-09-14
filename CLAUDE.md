@@ -33,6 +33,12 @@ done, Milestone 2 (export and persistence) is next.
   it — Aqua's stale-deps check fails on an unused one
 - CI tests Julia 1.10 (minimum supported), 1.12, and pre-release — don't use
   post-1.10 language or stdlib features
+- Workarounds to revert once Julia 1.10 support is dropped:
+  - `ARMAFilter`'s step (`kalmanstep!`/`forecast!` in
+    `src/timeseries/summarizers.jl`) calls `BLAS.gemv!`/`gemm!` because 1.10's
+    `mul!` dispatches at run time per row (JET caught it) — go back to `mul!`
+  - Aqua's persistent-tasks check is skipped on 1.10 (`test/runtests.jl`), and
+    the 1.10 CI job adds CausalFrames by URL, because 1.10 ignores `[sources]`
 - The default branch is `master`, not `main` — target PRs there
 
 ## CausalFrames dependency

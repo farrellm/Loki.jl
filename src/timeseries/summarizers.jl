@@ -499,7 +499,8 @@ function kalmanstep!(st::ARMAFilterState, fm::FittedARMA, y)
     a, P, att, Ptt, PZ, K = st.a, st.P, st.att, st.Ptt, st.PZ, st.K
     m = length(a)
     # BLAS directly rather than `mul!`, whose generic fallback dispatches at run
-    # time on Julia 1.10: this step runs once per row.
+    # time on Julia 1.10: this step runs once per row. Revert to `mul!` once Julia
+    # 1.10 support is dropped (see CLAUDE.md).
     BLAS.gemv!('N', 1.0, P, Z, 0.0, PZ)
     F = dot(Z, PZ) + fm.H
     fitted = dot(Z, a) + fm.d
