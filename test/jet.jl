@@ -55,4 +55,11 @@ using JET
         fst = CausalFrames.fresh(FitARMA(:y; order = (1, 0, 0)), intypes)
         JET.@test_opt CausalFrames.update!(fst, R((1, missing, fm)))
     end
+
+    @testset "fit row functions" begin
+        B = (Symbol("#fit_intercept_beta"), Symbol("#fit_x_beta"))
+        row = NamedTuple{(:time, :x, :z, B...)}((1, 2.0, 1.0, 0.5, missing))
+        JET.@test_opt Loki.LinearFitRow{(:x,),:z,B,true,:z_fitted,:z_residual}()(row)
+        JET.@test_opt Loki.LinearFitRow{(:x,),:z,B[2:2],false,:z_fitted,:z_residual}()(row)
+    end
 end

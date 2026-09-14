@@ -59,8 +59,14 @@ Three CausalFrames facilities carry most of the weight:
   and to place an in-sample model at the start of its window.
 
 Loki reads the `run` field of a `CausalPipeline` to wrap one (`tagged`,
-`cachedsource`). The field is the documented shape of the type, but an
-accessor would make that dependence explicit. Candidates to move upstream once
+`cachedsource`) or to serve, from its own `run`, a pipeline built from a frame
+it has just materialized (`fitonce`, `insample`). The field is the documented
+shape of the type, but an accessor would make that dependence explicit.
+`applyfit` and `fitinput` also read CausalFrames' fitting summarizers: the type
+parameters of `LinearRegression{P,Y}` and `FitModel{N,P,Y,M}` (predictors,
+response, model column) and `LinearRegression`'s `intercept` and `name` fields,
+which decide the coefficient column names. Accessors for those would make that
+dependence explicit too. Candidates to move upstream once
 they have settled: that accessor, the `Lags` and `EMA` summarizers (neither is
 time-series-model-specific), and `difference`.
 
@@ -351,11 +357,11 @@ diagnostics.
 
 ### `insample`
 
-`Loki.Acausal.insample(s; fitcontext = nothing, key)` takes a fitting
-summarizer and appends that model's fitted values and residuals to the stream.
-Its `run(ctx)`:
+`Loki.Acausal.insample(s; fitcontext = nothing, key)` (and the uncurried
+`insample(p, s; …)`) takes a fitting summarizer and appends that model's fitted
+values and residuals to the stream. Its `run(ctx)`:
 
-1. loads `p |> summarize(s; key)` over the fit context — `fitcontext` if given,
+1. loads `fitinput(s, p) |> summarize(s; key)` over the fit context — `fitcontext` if given,
    otherwise `ctx` itself — giving one model row per key at that context's
    `stop`;
 2. lifts the model table back in with `readtable(models; time = _ -> ctx.start)`,
@@ -376,7 +382,15 @@ Which apply operator is used is a method of `Loki.applyfit(s, p, models; key)`:
 | `LinearRegression` | `asofjoin` of the coefficient columns, then `addcolumns` of `β·x` | `y_fitted`, `y_residual` |
 | `FitModel` (MLJ) | `applymodels` | `y_fitted`, `y_residual` |
 
-A new fitting summarizer supports `insample` by adding an `applyfit` method.
+A new fitting summarizer supports `insample` by adding an `applyfit` method,
+and — when some rows must not reach the fit — a `Loki.fitinput(s, p)` method,
+which defaults to `p`. `LinearRegression` and `FitModel` drop the rows with a
+`missing` predictor or response, which would otherwise poison the fit, so a
+regression over row lags (an AR fit) fits on the rows with a complete history;
+`FitARMA` keeps them as gaps in the series. The coefficients `LinearRegression`'s
+apply joins arrive under a private prefix and are dropped after use, and the
+`FitModel` residual subtracts the prediction, so it needs a deterministic
+regressor.
 
 When `fitcontext` is narrower than the run's context — fit on `train`, evaluate
 over `analysis` — the rows inside `train` carry in-sample residuals and the rows

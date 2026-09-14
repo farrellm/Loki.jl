@@ -27,5 +27,8 @@
         models = src |> fitonce(Context(0, 21), FitARMA(:y; order = (1, 0, 1)))
         load(Context(0, 41), src |> applyarma(models, :y; horizon = 1))
         load(Context(0, 41), src |> arma(clock(10), 20, :y; order = (1, 0, 0)))
+        load(Context(0, 41), src |> Acausal.insample(FitARMA(:y; order = (1, 0, 0))))
+        load(Context(0, 41),
+            src |> lags(:y, 1) |> Acausal.insample(LinearRegression(:y_lag_1, :y)))
     end
 end

@@ -30,3 +30,11 @@ applyarma
 arma
 fitonce
 ```
+
+## In-sample fits
+
+```@docs
+Loki.Acausal.insample
+Loki.applyfit
+Loki.fitinput
+```

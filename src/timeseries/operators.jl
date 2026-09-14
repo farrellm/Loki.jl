@@ -315,3 +315,79 @@ function fitonce(trainctx::Context, s::Summarizer; key = nothing)
 end
 fitonce(pipeline::CausalPipeline, trainctx::Context, s::Summarizer; kwargs...) =
     fitonce(trainctx, s; kwargs...)(pipeline)
+
+# --- applying fits -------------------------------------------------------------------
+
+"""
+    Loki.applyfit(s::Summarizer, p::CausalPipeline, models::CausalPipeline;
+                  key = nothing) -> CausalPipeline
+
+Apply the model rows produced by the fitting summarizer `s` — a pipeline of
+`summarize(s; key)`'s output — to the stream `p`, appending the model's fitted
+values and residuals. Each row uses the latest model row not after it (per key).
+This is the causal half of [`Loki.Acausal.insample`](@ref); a new fitting
+summarizer supports `insample` by adding a method.
+
+| `s` | Apply | Columns appended |
+|---|---|---|
+| [`FitARMA`](@ref) | [`applyarma`](@ref) | `x_fitted`, `x_residual`, `x_stdresidual` |
+| CausalFrames' `LinearRegression` | `asofjoin` of the coefficients, then `β·x` | `y_fitted`, `y_residual` |
+| CausalFrames' `FitModel` (MLJ) | `applymodels` | `y_fitted`, `y_residual` |
+
+The `FitModel` residual subtracts the prediction, so it needs a deterministic
+regressor.
+"""
+function applyfit end
+
+applyfit(::FitARMA{C,N}, p::CausalPipeline, models::CausalPipeline;
+    key = nothing) where {C,N} = p |> applyarma(models, C; column = N, key)
+
+# Reads LinearRegression's type parameters and its `intercept` and `name` fields
+# (recorded in DESIGN.md): which columns it regresses on, and the names it gave
+# its coefficients.
+function applyfit(s::LinearRegression{P,Y}, p::CausalPipeline, models::CausalPipeline;
+    key = nothing) where {P,Y}
+    prefixed(base) = s.name === nothing ? base : Symbol(s.name, :_, base)
+    betas = (s.intercept ? (prefixed(:intercept_beta),) : ())
+    betas = (betas..., map(q -> prefixed(Symbol(q, :_beta)), P)...)
+    keycols = tokeys(key)
+    right = models |> selectcolumns(n -> Symbol(n) in betas || Symbol(n) in keycols)
+    # The coefficients arrive under a private prefix, so they cannot collide with
+    # the stream's own columns.
+    joined = map(b -> Symbol("#fit_", b), betas)
+    f = LinearFitRow{P,Y,joined,s.intercept,Symbol(Y, :_fitted),Symbol(Y, :_residual)}()
+    return p |> asofjoin(right; key, rightprefix = "#fit") |> addcolumns(f) |>
+           dropcolumns(joined...)
+end
+
+applyfit(::FitModel{N,P,Y}, p::CausalPipeline, models::CausalPipeline;
+    key = nothing) where {N,P,Y} =
+    p |> applymodels(models; column = N, key, name = Symbol(Y, :_fitted)) |>
+    addcolumns(ColumnDiff{Y,Symbol(Y, :_fitted),Symbol(Y, :_residual)}())
+
+# `β₀ + Σ βₚ xₚ` (without β₀ when `I` is false) and the residual, from the
+# joined coefficient columns `B` and the predictor columns `P`.
+struct LinearFitRow{P,Y,B,I,F,R} end
+@inline function (::LinearFitRow{P,Y,B,I,F,R})(row) where {P,Y,B,I,F,R}
+    betas = map(b -> getproperty(row, b), B)
+    xs = map(q -> getproperty(row, q), P)
+    fitted = linearfit(Val(I), betas, xs)
+    return NamedTuple{(F, R)}((fitted, getproperty(row, Y) - fitted))
+end
+@inline linearfit(::Val{true}, betas, xs) = first(betas) + sum(map(*, Base.tail(betas), xs))
+@inline linearfit(::Val{false}, betas, xs) = sum(map(*, betas, xs))
+
+"""
+    Loki.fitinput(s::Summarizer, p::CausalPipeline) -> CausalPipeline
+
+The stream the fitting summarizer `s` is fit on under
+[`Loki.Acausal.insample`](@ref): `p` itself by default. `LinearRegression` and
+`FitModel` drop the rows with a `missing` predictor or response, which would
+otherwise poison the fit, so a regression over row lags fits on the rows with a
+complete history. [`FitARMA`](@ref) keeps them, as gaps in the series.
+"""
+fitinput(::Summarizer, p::CausalPipeline) = p
+fitinput(::LinearRegression{P,Y}, p::CausalPipeline) where {P,Y} =
+    p |> filterrows(CompleteRows{(P..., Y)}())
+fitinput(::FitModel{N,P,Y}, p::CausalPipeline) where {N,P,Y} =
+    p |> filterrows(CompleteRows{(P..., Y)}())
