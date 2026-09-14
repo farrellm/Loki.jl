@@ -77,8 +77,11 @@ time-series-model-specific), and `difference`.
 Nodes with stable string ids, and edges from an output port to an input port.
 Ports are named per node kind; every port carries a `CausalPipeline`, so the
 one type check an edge needs is arity (a single-input port takes one edge, a
-variadic port such as `merge`'s takes many). `connect!` rejects an edge that
-would close a cycle. Node positions in the canvas are stored on the graph but
+variadic port such as `merge`'s takes many, in connection order; an optional
+port may be left unconnected). `connect!` rejects an edge that would close a
+cycle, and `addnode!`/`setparams!` reject parameters the kind does not accept,
+so every edit is checked where it is made. Ids are `n1`, `e2`, … unless given,
+and are never reused. Node positions in the canvas are stored on the graph but
 play no part in evaluation.
 
 ### `Node` and `NodeKind`
@@ -86,15 +89,32 @@ play no part in evaluation.
 A node is a kind plus a `params` dictionary. A kind is registered with
 `register_nodekind!` and declares:
 
-- `inputs(kind)` / `outputs(kind)` — port names and arities;
+- `inputs(kind)` — `Port`s, each a name and whether it is variadic or optional;
+  `outputs(kind)` — output port names;
 - `paramschema(kind)` — a JSON Schema for `params`, which the web inspector
   renders as a form and the MCP server publishes as a tool's `input_schema`, so
   the user and an agent edit the same vocabulary;
-- `build(kind, params, inputs) -> NamedTuple` of `CausalPipeline`s, one per
-  output port;
+- `validateparams(kind, params)` — checks the JSON-like values and fills in
+  defaults, run on every node edit;
+- `build(kind, params, inputs, env) -> NamedTuple` of `CausalPipeline`s, one per
+  output port. `inputs[port]` is a pipeline, a vector of them for a variadic
+  port, or `nothing` for an unconnected optional one; `env` resolves what
+  parameters name — contexts, tables, and source text in the user module;
 - `emit(kind, params, inputvars) -> Vector{Expr}` — the script lines that
-  reproduce `build` (see "Export");
-- `isacausal(kind, params) -> Bool` (default `false`).
+  reproduce `build` (see "Export"; Milestone 2);
+- `isacausal(kind, params, port) -> Bool` (default `false`), per output port, so
+  the fit node's `model` port stays causal while its `insample` port is not;
+- `iswrite(kind) -> Bool` (default `false`), marking the file sinks a run never
+  evaluates as a side effect.
+
+Most kinds are an `OpKind`: data — a name, a palette category, ports, a list of
+`Param` specs, a build function, and the acausal output ports — from which
+`paramschema` and `validateparams` are derived. A `Param`'s type is JSON's
+(`string`, `integer`, `number`, `boolean`, `enum`, `integers`) or Loki's own —
+`column`, `columns`, `code` (source text), `context`, `table` (names in the
+session) and `summarizers` — carried in the schema as an `x-loki` annotation
+the inspector keys its column pickers and code editors on. Parameter values
+stay JSON-like, so a graph saves and travels as data.
 
 `build` calls the real operator constructors, so a bad parameter is reported
 eagerly — the `ArgumentError` CausalFrames raises at construction becomes an
@@ -420,8 +440,9 @@ not be exported. As a pipeline it is an ordinary input to anything downstream.
 
 ### Taint
 
-The engine computes, for each node, whether any ancestor is acausal (an
-acausal kind, or `insample`). Tainted nodes are shaded in the canvas, reported
+The engine computes, for each output port, whether it or any ancestor is
+acausal (an acausal kind, or an `insample` port) — `taint(graph)`; a node is
+tainted when any of its outputs is. Tainted nodes are shaded in the canvas, reported
 as `acausal = true` by the MCP `get_graph` tool, and in the exported script
 the import of `Loki.Acausal` or `CausalFrames.Acausal` makes the dependence
 visible at the top. Taint is information, not a restriction: nothing refuses to

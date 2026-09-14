@@ -31,6 +31,8 @@ export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransfor
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")
 include("acausal.jl")
+include("registry.jl")
+include("graph.jl")
 include("precompile.jl")
 
 end
