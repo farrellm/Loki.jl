@@ -223,6 +223,7 @@ end
         wait(second)
         @test first.cancelled[]
         @test istaskdone(first.task) && istaskdone(second.task)
+        @test Loki.status(s, rows) === :idle
         @test Loki.status(s, clk) === :ok
         @test nrow(Loki.result(s, clk; context = "small")) == 100
     end
@@ -270,6 +271,10 @@ end
         Loki.connect!(s, (writer, :out), (after, :in))
         wait(Loki.run!(s, [after]))
         @test Loki.status(s, after) === :ok
+        @test !isfile(path)
+        # Watching the write node caches its passthrough, which write! must not serve.
+        wait(Loki.run!(s, [writer]))
+        @test Loki.result(s, writer) !== nothing
         @test !isfile(path)
         Loki.write!(s, writer)
         @test isfile(path)

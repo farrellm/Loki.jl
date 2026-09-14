@@ -232,6 +232,13 @@ session. Write nodes pass their input through; only [`Loki.write!`](@ref) writes
 function run!(s::Session, targets; context::AbstractString = "analysis", progress = nothing)
     return lock(s.lock) do
         cancel!(s)
+        # The cancelled run no longer owns the session's statuses, so it cannot
+        # settle its unfinished targets itself.
+        if s.run !== nothing
+            for (id, _) in s.run.targets
+                get(s.status, id, :idle) === :running && (s.status[id] = :idle)
+            end
+        end
         env = buildenv(s)
         ctx = namedcontext(env, context)
         wanted = totargets(s, targets)
@@ -270,7 +277,7 @@ function cancel!(s::Session)
 end
 
 function executerun(s::Session, run::Run, ctx::Context, jobs::Vector{Job}, progress)
-    for job in jobs
+    for (i, job) in enumerate(jobs)
         run.cancelled[] && break
         frame = try
             Base.invokelatest(streamjob, run, ctx, job, progress)
@@ -286,7 +293,9 @@ function executerun(s::Session, run::Run, ctx::Context, jobs::Vector{Job}, progr
                 s.run === run && (s.status[job.id] = :idle)
             else
                 cacheput!(s.cache, (job.id, job.port, job.hash, ctx), frame)
+                # A node is :ok once its last watched port is in, not its first.
                 s.run === run && get(s.status, job.id, :idle) === :running &&
+                    !any(j -> j.id == job.id, view(jobs, (i+1):lastindex(jobs))) &&
                     (s.status[job.id] = :ok)
             end
         end

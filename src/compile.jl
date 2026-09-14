@@ -159,7 +159,9 @@ function compilenode!(c::Compilation, id::String)
     h = c.hashes[id]
     outs = map(keys(built)) do port
         p = tagged(built[port], id)
-        frame = cacheget(c.cache, (id, port, h, c.context))
+        # A write node asked to write must run: its cached result is the passthrough
+        # a watching run stored under the same key, and serving it writes nothing.
+        frame = id in c.writes ? nothing : cacheget(c.cache, (id, port, h, c.context))
         frame === nothing ? p : cachedsource(frame, p)
     end
     return c.outputs[id] = NamedTuple{keys(built)}(outs)
