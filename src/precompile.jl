@@ -12,5 +12,33 @@
             scan(ctx, readtable(table) |> writeparquet(path; backend))
             load(ctx, readparquet(path; backend))
         end
+        load(ctx,
+            readtable(table) |> lags(:x, 2) |> difference(:x) |> logtransform(:x) |>
+            boxcox(:x; lambda = 0.5))
+        load(ctx,
+            readtable(table) |> ema(:x; span = 3) |> ema(:x; halflife = 2) |>
+            macd(:x; fast = 2, slow = 3, signal = 2))
+        load(ctx, readtable(table) |> ar(:x, 1))
+
+        # An ARMA fit and filter: the first `fit!` otherwise costs a user many
+        # seconds of compilation.
+        series = (time = collect(1:40), y = sin.(1:40) .+ 0.1 .* cos.((1:40) .^ 2))
+        src = readtable(series)
+        models = src |> fitonce(Context(0, 21), FitARMA(:y; order = (1, 0, 1)))
+        load(Context(0, 41), src |> applyarma(models, :y; horizon = 1))
+        load(Context(0, 41), src |> arma(clock(10), 20, :y; order = (1, 0, 0)))
+        load(Context(0, 41), src |> Acausal.insample(FitARMA(:y; order = (1, 0, 0))))
+        load(Context(0, 41),
+            src |> lags(:y, 1) |> Acausal.insample(LinearRegression(:y_lag_1, :y)))
+
+        # A headless session: a graph built from node kinds, compiled, and
+        # evaluated synchronously by freeze! (runs spawn tasks, which a
+        # precompile workload should not leave behind).
+        session = Session(; tables = (series = series,),
+            contexts = (analysis = Context(0, 41),))
+        node = addnode!(session, "table", Dict("table" => "series"))
+        smooth = addnode!(session, "ema", Dict("column" => "y", "span" => 5))
+        connect!(session, (node, :out), (smooth, :in))
+        freeze!(session, smooth)
     end
 end

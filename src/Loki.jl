@@ -17,7 +17,30 @@ using Parquet2: Parquet2
 import MLJModelInterface
 using PrecompileTools: @setup_workload, @compile_workload
 
+using Dates: Dates
+using Statistics: Statistics
+using DataFrames: DataFrame, nrow
+
+using LinearAlgebra: BLAS, I, dot
+using MatrixEquations: lyapd
+# Imported as a module: StateSpaceModels exports a `LinearRegression` that would
+# clash with CausalFrames'.
+import StateSpaceModels as SSM
+
+export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
+    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce
+
+include("timeseries/summarizers.jl")
+include("timeseries/operators.jl")
 include("acausal.jl")
+include("registry.jl")
+include("graph.jl")
+include("usercode.jl")
+include("nodes/causalframes.jl")
+include("nodes/timeseries.jl")
+include("compile.jl")
+include("engine.jl")
+include("session.jl")
 include("precompile.jl")
 
 end
