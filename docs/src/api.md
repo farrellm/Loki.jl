@@ -58,6 +58,15 @@ Loki.nodekind
 Loki.nodekinds
 ```
 
+## User code
+
+```@docs
+Loki.UserCode
+Loki.setprelude!
+Loki.evalcode
+Loki.BuildEnv
+```
+
 ## Graph
 
 ```@docs

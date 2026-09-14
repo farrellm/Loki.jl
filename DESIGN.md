@@ -160,6 +160,28 @@ exposed for the cases where the choice matters.
 Row-function parameters — `filterrows`' predicate, `addcolumns`' function,
 `settime`'s spec — are Julia source text (see "User code").
 
+Parameters follow a few conventions, so every kind reads alike:
+
+- Column names are strings; `key` is a name or a list of names.
+- Anything that is a Julia *value* rather than a name — an interval, a
+  tolerance, a look-back, a predicate, a row function, `readcsv`'s type
+  dictionary, `fillmissing`'s values, `addrollingcolumns`' windows, an MLJ
+  model — is source text, passed to the operator exactly as evaluated.
+- A column selection (`selectcolumns`, `dropcolumns`, `reordercolumns`,
+  `forwardfill`) is `columns` by name plus an optional `match` expression, a
+  `Regex` or a predicate on the name.
+- A summarizer entry is `{summarizer, columns, options}`: the summarizer's
+  column arguments, then its remaining arguments by name — `n` for `SumPower`
+  and `Moment`, `response` (and `intercept`, `name`) for `LinearRegression`,
+  `model` (source text) and `response` for `FitModel` — and Loki's `Lags`,
+  `EMA` and `FitARMA` are entries too.
+- The file sinks (`writecsv`, `writeparquet`, `writejls`) are write kinds.
+- `CausalFrames.Acausal.settime` is the `acausal_settime` kind, `settime` being
+  the causal one's name.
+
+The palette's categories are sources, files, rows, columns, summarizing, joins,
+time series, models and acausal.
+
 ### In-memory tables
 
 A `table` source node is `readtable(tbl; time, sort)` over a table the session
@@ -431,6 +453,14 @@ The node's parameters are the model family (ARMA, AR by least squares, MLJ
 model), its options, the fit context, and the key. Exporting it emits one
 binding per connected port.
 
+Concretely, `family` is `arma` (with `order`, `seasonal_order`,
+`include_mean`), `ar` (with `p`) or `mlj` (with `model` as source text and
+`predictors`); `column` is the series, or the response for `mlj`. The `model`
+port is `fitinput(s, p) |> summarize(s; key)`, or `fitonce` of it over the named
+`fitcontext`; the `insample` port is `p |> insample(s; fitcontext, key)`. An `ar`
+fit is `LinearRegression` (named `ar`) over `lags(:x, p)`, with the lag columns
+dropped from the in-sample stream.
+
 ### Why a pipeline, not a diagnostic
 
 Residuals are rarely the end of the analysis. They get differenced again, fit
@@ -575,6 +605,16 @@ text. Each session owns an anonymous module, created with
 helper definitions evaluated into the module first and emitted at the top of an
 exported script. Source text is exported verbatim, so the script says exactly
 what the user typed.
+
+The module binds `CausalFrames`, `Loki`, `Dates` and `Statistics` directly and
+`using`s them relatively, so it does not depend on which environment is active.
+Changing the prelude builds a fresh module, so a removed definition is really
+gone; a prelude that fails to evaluate leaves the previous one in place.
+Evaluated values are cached by source text until the prelude changes, so
+rebuilding a node with unchanged parameters gets the same function back. A
+parse error is an `ArgumentError` naming the parameter. Functions defined this
+way are newer than the engine's code, so the engine compiles and runs a graph
+under `invokelatest`, once per run — never per row.
 
 This is arbitrary code execution, and the design does not pretend otherwise.
 The containment is the server's:

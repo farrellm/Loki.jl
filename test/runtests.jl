@@ -33,6 +33,7 @@ include("fixtures.jl")
     include("arma.jl")
     include("insample.jl")
     include("graph.jl")
+    include("nodes.jl")
 
     # JET can lag pre-release Julia; the checks are the same on every
     # released version, so skipping them there loses nothing.
