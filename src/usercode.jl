@@ -14,7 +14,9 @@ definitions — is evaluated first. Expression parameters are evaluated there by
 [`Loki.evalcode`](@ref).
 """
 mutable struct UserCode
-    mod::Module
+    # Created on first use, so a session that evaluates no source text never makes
+    # one — and can be built where modules cannot, such as a precompile workload.
+    mod::Union{Nothing,Module}
     prelude::String
     # Source text → value, so a node rebuilt with unchanged parameters gets the
     # same function back. Reset with the module whenever the prelude changes.
@@ -22,7 +24,7 @@ mutable struct UserCode
 end
 
 function UserCode(; prelude::AbstractString = "")
-    uc = UserCode(usermodule(), "", Dict{String,Any}())
+    uc = UserCode(nothing, "", Dict{String,Any}())
     setprelude!(uc, prelude)
     return uc
 end
@@ -48,8 +50,11 @@ a definition removed from the prelude is gone. An error in the prelude is raised
 leaving the previous module and prelude in place.
 """
 function setprelude!(uc::UserCode, prelude::AbstractString)
-    mod = usermodule()
-    isempty(strip(prelude)) || Base.include_string(mod, String(prelude), "prelude")
+    mod = nothing
+    if !isempty(strip(prelude))
+        mod = usermodule()
+        Base.include_string(mod, String(prelude), "prelude")
+    end
     uc.mod = mod
     uc.prelude = String(prelude)
     empty!(uc.values)
@@ -78,7 +83,8 @@ function evalcode(uc::UserCode, source::AbstractString; what::AbstractString = "
     expr === nothing && throw(ArgumentError("$what is empty"))
     expr isa Expr && expr.head === :incomplete &&
         throw(ArgumentError("cannot parse $what $(repr(key)): incomplete expression"))
-    value = Core.eval(uc.mod, expr)
+    mod = uc.mod === nothing ? (uc.mod = usermodule()) : uc.mod
+    value = Core.eval(mod, expr)
     uc.values[key] = value
     return value
 end

@@ -30,5 +30,15 @@
         load(Context(0, 41), src |> Acausal.insample(FitARMA(:y; order = (1, 0, 0))))
         load(Context(0, 41),
             src |> lags(:y, 1) |> Acausal.insample(LinearRegression(:y_lag_1, :y)))
+
+        # A headless session: a graph built from node kinds, compiled, and
+        # evaluated synchronously by freeze! (runs spawn tasks, which a
+        # precompile workload should not leave behind).
+        session = Session(; tables = (series = series,),
+            contexts = (analysis = Context(0, 41),))
+        node = addnode!(session, "table", Dict("table" => "series"))
+        smooth = addnode!(session, "ema", Dict("column" => "y", "span" => 5))
+        connect!(session, (node, :out), (smooth, :in))
+        freeze!(session, smooth)
     end
 end

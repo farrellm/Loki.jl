@@ -68,7 +68,7 @@ parameters of `LinearRegression{P,Y}` and `FitModel{N,P,Y,M}` (predictors,
 response, model column) and `LinearRegression`'s `intercept` and `name` fields,
 which decide the coefficient column names. Accessors for those would make that
 dependence explicit too. Candidates to move upstream once
-they have settled: that accessor, the `Lags` and `EMA` summarizers (neither is
+they have settled: those accessors, the `Lags` and `EMA` summarizers (neither is
 time-series-model-specific), and `difference`.
 
 ## Core types
@@ -628,8 +628,9 @@ what the user typed.
 
 The module binds `CausalFrames`, `Loki`, `Dates` and `Statistics` directly and
 `using`s them relatively, so it does not depend on which environment is active.
-Changing the prelude builds a fresh module, so a removed definition is really
-gone; a prelude that fails to evaluate leaves the previous one in place.
+The module is created on first use, so a session that evaluates no source text
+never makes one. Changing the prelude builds a fresh module, so a removed
+definition is really gone; a prelude that fails to evaluate leaves the previous one in place.
 Evaluated values are cached by source text until the prelude changes, so
 rebuilding a node with unchanged parameters gets the same function back. A
 parse error is an `ArgumentError` naming the parameter. Functions defined this
@@ -959,9 +960,12 @@ source of truth for the design.
 ## Milestones
 
 0. Package scaffolding: dependencies, the module skeleton, the Aqua and JET
-   test harness, formatting, the Documenter site, and CI.
+   test harness, formatting, the Documenter site, and CI. *Done.*
 1. Loki's time-series operators, `insample`, the fit node's two ports, the
-   graph, and the engine — usable headless from the REPL.
+   graph, and the engine — usable headless from the REPL. *Done:* every
+   operator in the catalog above, the node registry and graph, the session's
+   user code, and the engine and cache behind a headless `Session`; `emit`
+   arrives with Milestone 2.
 2. Export and persistence.
 3. The server and web app, with diagnostics and the residual panel.
 4. MCP mode.
