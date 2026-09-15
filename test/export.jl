@@ -1,6 +1,15 @@
-# Export: the script printer, and that every node kind's `emit` reproduces what
-# its `build` does — the emitted text, evaluated in a module carrying the imports
-# an exported script gets, loads to the same frame.
+# Export: the script printer, that every node kind's `emit` reproduces what its
+# `build` does, the table snapshots a script reads back, and that including an
+# exported script reproduces the session's frames.
+
+using Dates
+
+# Two fits of the same data say the same thing without being the same object: a
+# FittedARMA holds a mutable SARIMA, which `isequal` compares by identity.
+fitsummary(fm::FittedARMA) = (fm.order, fm.seasonal_order, fm.status, fm.coefs)
+fitsummary(x) = x
+comparable(df::DataFrame) = mapcols(col -> map(fitsummary, col), df)
+comparable(frame::CausalFrame) = comparable(DataFrame(frame))
 
 @testset "script printer" begin
     E = Loki.exprstring
@@ -96,12 +105,6 @@ end
     for (name, pipeline) in sources
         Core.eval(m, :($name = $pipeline))
     end
-
-    # Two fits of the same data say the same thing without being the same object:
-    # a FittedARMA holds a mutable SARIMA, which `isequal` compares by identity.
-    fitsummary(fm::FittedARMA) = (fm.order, fm.seasonal_order, fm.status, fm.coefs)
-    fitsummary(x) = x
-    comparable(df::DataFrame) = mapcols(col -> map(fitsummary, col), df)
 
     # Build and emit the same node, then compare what each loads, port by port.
     function agrees(kind, params, context; ports = nothing, inputs...)
@@ -310,4 +313,214 @@ end
     @test_throws ArgumentError bad("summarize", Dict("summarizers" => Dict{String,Any}[]);
         in = :p1)
     @test_throws ArgumentError bad("clock", Dict{String,Any}())
+end
+
+@testset "table snapshots" begin
+    dir = mktempdir()
+    plain = DataFrame(time = 1:3, i = Int32[1, 2, 3], f = [1.5, missing, 3.5],
+        s = ["a", "b", missing], b = [true, false, true],
+        d = Date(2020, 1, 1) .+ Day.(0:2), t = DateTime(2020, 1, 1) .+ Hour.(0:2))
+    file = Loki.savetable(dir, "plain", plain)
+    @test file.format === :parquet && !file.frame && file.context === nothing
+    @test isequal(DataFrame(Loki.loadtable(file)), plain)
+
+    # A lookup table has no time column, which parquet does not need.
+    dim = DataFrame(k = [1, 3], label = ["one", "three"])
+    @test isequal(DataFrame(Loki.loadtable(Loki.savetable(dir, "dim", dim))), dim)
+
+    # A frozen frame comes back as the frame it was, rows at `stop` and all, and
+    # still refuses a context outside its own.
+    ctx = Context(0, 11)
+    frame = load(ctx, readtable(plain) |> summarize(Mean(:f)))
+    framefile = Loki.savetable(dir, "frame", frame)
+    @test framefile.format === :parquet && framefile.frame
+    back = Loki.loadtable(framefile)
+    @test back isa CausalFrame
+    @test context(back) == ctx
+    @test isequal(DataFrame(back), DataFrame(frame))
+    @test nrow(back) == 1                      # the summary row, emitted at stop
+    @test_throws ArgumentError load(Context(0, 20), readtable(back))
+
+    # A frame holding what parquet cannot store falls back to CausalFrames' JLS.
+    ts = DataFrame(time = 1:120, y = simulate(Xoshiro(5), 120))
+    tctx = Context(0, 121)
+    models = load(tctx, readtable(ts) |> fitarma(:y; order = (1, 0, 0)))
+    modelfile = Loki.savetable(dir, "models", models)
+    @test modelfile.format === :jls && modelfile.frame
+    reloaded = Loki.loadtable(modelfile)
+    @test isequal(comparable(reloaded), comparable(models))
+    @test only(DataFrame(reloaded).model) isa FittedARMA
+
+    # A plain table parquet cannot hold is an error naming the column.
+    symbols = DataFrame(time = 1:2, tag = [:a, :b])
+    err = try
+        Loki.savetable(dir, "symbols", symbols)
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("tag", err.msg)
+    @test occursin("tables = :argument", err.msg)
+end
+
+# A session covering the shapes a script has to get right: a prelude the row
+# functions need, several contexts, a table and a frozen frame, a file source, a
+# fan-out, a multi-output fit node, and a write node with a consumer downstream.
+function exportsession(dir)
+    df = DataFrame(time = 1:50, k = repeat([1, 2], 25),
+        close = 100.0 .+ cumsum(simulate(Xoshiro(8), 50)))
+    dim = DataFrame(k = [1, 2], label = ["a", "b"])
+    s = Loki.Session(; tables = (prices = df, dim = dim),
+        contexts = (analysis = Context(0, 51), train = Context(0, 26)))
+    Loki.setprelude!(s, "positive(x) = x > 0")
+    src = Loki.addnode!(s, "table", Dict("table" => "prices"))
+    kept = Loki.addnode!(s, "filterrows", Dict("predicate" => "r -> positive(r.close)"))
+    logc = Loki.addnode!(s, "logtransform", Dict("column" => "close"))
+    dlog = Loki.addnode!(s, "difference", Dict("column" => "close_log"))
+    look = Loki.addnode!(s, "lookupjoin", Dict("table" => "dim", "key" => "k"))
+    fit = Loki.addnode!(s, "fit",
+        Dict("family" => "ar", "column" => "close_log_diff", "p" => 2))
+    writer = Loki.addnode!(s, "writecsv", Dict("path" => joinpath(dir, "out.csv")))
+    after = Loki.addnode!(s, "head", Dict("n" => 5))
+    for (from, to) in ((src, kept), (kept, logc), (logc, dlog), (dlog, look),
+        (look, fit), (look, writer), (writer, after))
+        Loki.connect!(s, (from, :out), (to, :in))
+    end
+    wait(Loki.run!(s, [(fit, :insample), (fit, :model), after]))
+    # Freezing pins an intermediate result, which exports as a frame snapshot.
+    frozen = Loki.freeze!(s, dlog; name = "frozenlog")
+    fnode = Loki.addnode!(s, "table", Dict("table" => frozen))
+    smooth = Loki.addnode!(s, "ema", Dict("column" => "close_log_diff", "span" => 3))
+    Loki.connect!(s, (fnode, :out), (smooth, :in))
+    targets = [(fit, :insample), (fit, :model), (after, :out), (smooth, :out)]
+    wait(Loki.run!(s, targets))
+    return s, targets, joinpath(dir, "out.csv")
+end
+
+# The name the script binds a loaded frame to.
+framebinding(s, id, port) =
+    length(Loki.outputs(Loki.nodekind(s.graph.nodes[id].kind))) == 1 ?
+    Symbol("frame_", id) : Symbol("frame_", id, "_", port)
+
+@testset "exportjulia" begin
+    @testset "including the script reproduces the session" begin
+        dir = mktempdir()
+        s, targets, csv = exportsession(dir)
+        path = exportjulia(joinpath(dir, "script.jl"), s)
+        @test isfile(path)
+        @test Set(readdir(dir)) ==
+              Set(["script.jl", "prices.parquet", "dim.parquet", "frozenlog.parquet"])
+
+        m = Module(:ExportedSession)
+        Base.include(m, path)
+        for (id, port) in targets
+            frame = Base.invokelatest(getfield, m, framebinding(s, id, port))
+            @test isequal(comparable(frame), comparable(Loki.result(s, id; port)))
+        end
+        # Watching never writes, and neither does including a script.
+        @test !isfile(csv)
+
+        # The write node is still in the script, as a binding nothing reads.
+        text = read(path, String)
+        @test occursin("writecsv(", text)
+        @test occursin("# scan(analysis, ", text)
+    end
+
+    @testset "tables as an argument" begin
+        dir = mktempdir()
+        s, targets, _ = exportsession(dir)
+        text = exportjulia(s)
+        @test occursin("# `tables`: supplied by the caller", text)
+        @test !occursin("SCRIPTDIR", text)
+        @test isempty(filter(f -> endswith(f, ".parquet"), readdir(dir)))
+
+        m = Module(:ExportedWithTables)
+        Core.eval(m, :(using CausalFrames, Loki))
+        Core.eval(
+            m,
+            :(
+                tables = (prices = $(s.tables["prices"]), dim = $(s.tables["dim"]),
+                    frozenlog = $(s.tables["frozenlog"]))
+            ),
+        )
+        Base.include_string(m, text)
+        for (id, port) in targets
+            frame = Base.invokelatest(getfield, m, framebinding(s, id, port))
+            @test isequal(comparable(frame), comparable(Loki.result(s, id; port)))
+        end
+    end
+
+    @testset "targets" begin
+        dir = mktempdir()
+        s, _, _ = exportsession(dir)
+        # By default the last run's targets.
+        text = exportjulia(s)
+        @test occursin("frame_n6_insample = load(analysis, p_n6_insample)", text)
+        # Or exactly what is asked for, node ids and (id, port) pairs alike.
+        one = exportjulia(s; targets = [("n4", :out)])
+        @test occursin("frame_n4 = load(analysis, p_n4)", one)
+        @test !occursin("frame_n6", one)
+        # A context other than the analysis window.
+        @test occursin("load(train,", exportjulia(s; context = "train"))
+        @test_throws ArgumentError exportjulia(s; context = "nope")
+        @test_throws ArgumentError exportjulia(s; tables = :snapshot)
+        @test_throws ArgumentError exportjulia(s; tables = :nonsense)
+    end
+
+    @testset "what cannot be exported" begin
+        s = Loki.Session(; contexts = (analysis = Context(0, 10),))
+        lonely = Loki.addnode!(s, "logtransform", Dict("column" => "x"))
+        @test_throws Loki.NodeError exportjulia(s)
+
+        s2 = Loki.Session(; contexts = (analysis = Context(0, 10),))
+        Loki.addnode!(s2, "emptyframe"; id = "an id")
+        @test_throws ArgumentError exportjulia(s2)
+
+        s3 = Loki.Session(; contexts = (analysis = Context(0, 10),))
+        Loki.setcontext!(s3, "my window", Context(0, 5))
+        Loki.addnode!(s3, "emptyframe")
+        @test_throws ArgumentError exportjulia(s3)
+    end
+end
+
+@testset "golden script" begin
+    # A graph with fixed ids and no temporary paths, so its script is stable
+    # enough to diff. Regenerate with LOKI_UPDATE_GOLDEN=1.
+    s = Loki.Session(;
+        contexts = (analysis = Context(DateTime(2015, 1, 1), DateTime(2026, 1, 1)),
+            train = Context(DateTime(2015, 1, 1), DateTime(2020, 6, 30, 12, 30))))
+    Loki.setprelude!(s, "const TYPES = Dict(:time => DateTime, :close => Float64)")
+    csv = Loki.addnode!(s, "readcsv",
+        Dict("path" => "prices.csv", "types" => "TYPES"); id = "csv")
+    logc = Loki.addnode!(s, "logtransform", Dict("column" => "close"); id = "log")
+    diff = Loki.addnode!(s, "difference", Dict("column" => "close_log"); id = "diff")
+    clk = Loki.addnode!(s, "clock", Dict("interval" => "Day(1)"); id = "clk")
+    win = Loki.addnode!(s, "summarizewindows",
+        Dict("lookback" => "Day(30)",
+            "summarizers" => [Dict("summarizer" => "Count"),
+                Dict("summarizer" => "Std", "columns" => ["close_log_diff"])]);
+        id = "win")
+    join = Loki.addnode!(s, "asofjoin", Dict("tolerance" => "Day(7)"); id = "join")
+    ahead = Loki.addnode!(s, "lead", Dict("offset" => "Day(1)"); id = "ahead")
+    fit = Loki.addnode!(s, "fit",
+        Dict("family" => "arma", "column" => "close_log_diff", "order" => [1, 0, 1],
+            "fitcontext" => "train"); id = "fit")
+    out = Loki.addnode!(s, "writeparquet", Dict("path" => "residuals.parquet"); id = "out")
+    Loki.connect!(s, (csv, :out), (logc, :in))
+    Loki.connect!(s, (logc, :out), (diff, :in))
+    Loki.connect!(s, (diff, :out), (win, :data))
+    Loki.connect!(s, (clk, :out), (win, :clock))
+    Loki.connect!(s, (diff, :out), (join, :left))
+    Loki.connect!(s, (win, :out), (join, :right))
+    Loki.connect!(s, (join, :out), (ahead, :in))
+    Loki.connect!(s, (join, :out), (fit, :in))
+    Loki.connect!(s, (fit, :insample), (out, :in))
+
+    text = exportjulia(s)
+    golden = joinpath(@__DIR__, "golden", "session.jl.txt")
+    if get(ENV, "LOKI_UPDATE_GOLDEN", "") == "1"
+        mkpath(dirname(golden))
+        write(golden, text)
+    end
+    @test text == read(golden, String)
 end

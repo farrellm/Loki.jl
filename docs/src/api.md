@@ -61,10 +61,14 @@ Loki.nodekinds
 ## Export
 
 ```@docs
+exportjulia
 Loki.emit
 Loki.canemit
 Loki.Code
 Loki.exprstring
+Loki.TableFile
+Loki.savetable
+Loki.loadtable
 ```
 
 ## User code

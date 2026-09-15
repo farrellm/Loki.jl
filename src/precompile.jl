@@ -40,5 +40,8 @@
         smooth = addnode!(session, "ema", Dict("column" => "y", "span" => 5))
         connect!(session, (node, :out), (smooth, :in))
         freeze!(session, smooth)
+        # The exporter, printer and all: the first export otherwise costs a user
+        # seconds of compilation. `:argument` writes nothing.
+        exportjulia(session)
     end
 end

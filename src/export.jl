@@ -161,3 +161,294 @@ function needsparens(c::Code)
     expr isa Expr || return false
     return !(expr.head in BAREHEADS)
 end
+
+# --- exporting a session ------------------------------------------------------
+
+"""
+    exportjulia(session; tables = :argument, targets = nothing, context = "analysis")
+        -> String
+    exportjulia(path, session; tables = :snapshot, …) -> path
+
+The session's graph as a plain Julia script that runs without Loki's server: the
+imports the session's user module has, the prelude verbatim, the named contexts
+as `const` bindings, one binding per node output in topological order, and a
+`load` of each target over the named context. The second method writes the script
+to `path`.
+
+`targets` are node ids or `(id, port)` pairs, as [`Loki.run!`](@ref) takes them;
+by default the last run's targets, or every output port nothing else reads. A
+node's binding is `p_<id>`, or `p_<id>_<port>` for a node with several outputs,
+and a loaded frame's is `frame_<id>[_<port>]` — so including the script and
+comparing those frames against the session's is what "the export is correct"
+means.
+
+`tables` says where the session's in-memory tables come from:
+
+- `:snapshot` writes each one beside the script (see [`Loki.savetable`](@ref))
+  and defines `tables` to read them back;
+- `:argument` leaves `tables` to the caller, who supplies a `NamedTuple` with a
+  field per table the graph names.
+
+A write node keeps its binding, but nothing downstream reads it and no target
+loads it — a run passes a write node's input through, and including a script
+must not write files. The commented `scan` line at the foot is how to run one.
+"""
+function exportjulia(s::Session; tables::Symbol = :argument, targets = nothing,
+    context::AbstractString = "analysis", dir::Union{Nothing,AbstractString} = nothing)
+    tables in (:argument, :snapshot) ||
+        throw(ArgumentError("tables must be :argument or :snapshot, got $(repr(tables))"))
+    tables === :snapshot && dir === nothing &&
+        throw(
+            ArgumentError("a table snapshot needs a directory to write into: \
+            exportjulia(path, session)"))
+    return lock(s.lock) do
+        scripttext(s, tables, targets, String(context), dir)
+    end
+end
+
+function exportjulia(path::AbstractString, s::Session; tables::Symbol = :snapshot,
+    kwargs...)
+    text = exportjulia(s; tables, dir = dirname(abspath(path)), kwargs...)
+    write(path, text)
+    return String(path)
+end
+
+const SCRIPTHEADER = "# Exported from a Loki session."
+
+function scripttext(s::Session, tablemode::Symbol, targets, ctxname::String, dir)
+    haskey(s.contexts, ctxname) ||
+        throw(ArgumentError("the session has no context $(repr(ctxname))"))
+    wanted = targets === nothing ? defaulttargets(s) : totargets(s, targets)
+    bindings, body, calls, writes = bindinglines(s, wanted)
+    names = tablenames(s.graph)
+    snapshots = Dict{String,TableFile}()
+    if tablemode === :snapshot
+        for name in names
+            snapshots[name] = savetable(dir, name, namedtable(buildenv(s), name))
+        end
+    end
+    sections = [
+        [SCRIPTHEADER; importlines(calls, snapshots)],
+        preludelines(s),
+        contextlines(s),
+        tablelines(names, tablemode, snapshots),
+        body,
+        loadlines(s, wanted, bindings, ctxname, writes),
+    ]
+    return join([join(sec, "\n") for sec in sections if !isempty(sec)], "\n\n") * "\n"
+end
+
+# The ports a script ends by loading: the last run's, or every output nothing
+# reads. A write node's output is never one of them.
+function defaulttargets(s::Session)
+    run = s.run
+    if run !== nothing && !isempty(run.targets) &&
+       all(t -> haskey(s.graph.nodes, t[1]), run.targets)
+        return collect(run.targets)
+    end
+    g = s.graph
+    wanted = Tuple{String,Symbol}[]
+    for id in topoorder(g)
+        kind = nodekind(g.nodes[id].kind)
+        iswrite(kind) && continue
+        for port in outputs(kind)
+            any(e -> e.from == (id, port), g.edges) || push!(wanted, (id, port))
+        end
+    end
+    return wanted
+end
+
+# One binding per node output that something reads or loads, in topological
+# order, with each node's errors attributed to it as a run's are.
+function bindinglines(s::Session, wanted)
+    g = s.graph
+    bindings = Dict{Tuple{String,Symbol},Symbol}()
+    lines = String[]
+    calls = Set{Symbol}()
+    writes = Tuple{String,Symbol}[]
+    for id in topoorder(g)
+        node = g.nodes[id]
+        kind = nodekind(node.kind)
+        ins = Dict{Symbol,Any}()
+        for port in inputs(kind)
+            fed = [
+                inputbinding(bindings, g, e.from)
+                for e in inedges(g, id) if e.to[2] === port.name
+            ]
+            ins[port.name] = if port.variadic
+                fed
+            elseif isempty(fed)
+                port.optional || throw(
+                    NodeError(id,
+                        ArgumentError("input port $(port.name) is not connected")),
+                )
+                nothing
+            else
+                only(fed)
+            end
+        end
+        emitted = try
+            emit(kind, node.params, ins)
+        catch err
+            err isa InterruptException && rethrow()
+            throw(tagerror(err, id))
+        end
+        iswrite(kind) && push!(writes, (id, first(outputs(kind))))
+        for port in outputs(kind)
+            iswrite(kind) || (id, port) in wanted ||
+                any(e -> e.from == (id, port), g.edges) || continue
+            name = bindingname(g, id, port)
+            bindings[(id, port)] = name
+            collectcalls!(calls, emitted[port])
+            push!(lines, exprstring(Expr(:(=), name, emitted[port])))
+        end
+    end
+    return bindings, lines, calls, writes
+end
+
+# A run compiles a write node as a pass-through of its input, so what a consumer
+# reads is that input's binding, not the one that writes the file.
+function inputbinding(bindings, g::Graph, from::Tuple{String,Symbol})
+    id, port = from
+    if iswrite(nodekind(g.nodes[id].kind))
+        i = findfirst(e -> e.to == (id, :in), g.edges)
+        i === nothing && throw(NodeError(id,
+            ArgumentError("input port in is not connected")))
+        return inputbinding(bindings, g, g.edges[i].from)
+    end
+    return bindings[(id, port)]
+end
+
+bindingname(g::Graph, id::AbstractString, port::Symbol) =
+    scriptname("p_", id, length(outputs(nodekind(g.nodes[id].kind))) == 1 ? nothing : port)
+
+framename(g::Graph, id::AbstractString, port::Symbol) =
+    scriptname(
+        "frame_",
+        id,
+        length(outputs(nodekind(g.nodes[id].kind))) == 1 ? nothing :
+        port,
+    )
+
+function scriptname(prefix::String, id::AbstractString, port)
+    name = port === nothing ? Symbol(prefix, id) : Symbol(prefix, id, "_", port)
+    Base.isidentifier(name) ||
+        throw(ArgumentError("node id $(repr(id)) does not make a Julia identifier, \
+            so it cannot be exported"))
+    return name
+end
+
+collectcalls!(names::Set{Symbol}, x) = names
+function collectcalls!(names::Set{Symbol}, e::Expr)
+    e.head === :call && e.args[1] isa Symbol && push!(names, e.args[1])
+    for a in e.args
+        collectcalls!(names, a)
+    end
+    return names
+end
+
+# The acausal names a script calls are imported by name, which is where the
+# dependence on looking ahead is meant to be visible.
+const ACAUSALNAMES = (("Loki.Acausal", (:insample,)),
+    ("CausalFrames.Acausal", (:lead, :futurejoin)))
+
+function importlines(calls::Set{Symbol}, snapshots)
+    lines = ["using CausalFrames, Loki, Dates, Statistics"]
+    extras = String[]
+    (:readparquet in calls || :writeparquet in calls) &&
+        append!(extras, ["DuckDB", "Parquet2"])
+    files = collect(values(snapshots))
+    any(f -> f.format === :parquet, files) && push!(extras, "Parquet2")
+    any(f -> f.format === :parquet && !f.frame, files) && push!(extras, "DataFrames")
+    isempty(extras) || push!(lines, "using " * join(sort!(unique!(extras)), ", "))
+    for (mod, names) in ACAUSALNAMES
+        used = [String(n) for n in names if n in calls]
+        isempty(used) || push!(lines, "using $mod: " * join(used, ", "))
+    end
+    return lines
+end
+
+preludelines(s::Session) =
+    isempty(strip(s.usercode.prelude)) ? String[] : [strip(s.usercode.prelude)]
+
+function contextlines(s::Session)
+    lines = String[]
+    for name in sort!(collect(keys(s.contexts)))
+        Base.isidentifier(name) ||
+            throw(ArgumentError("context name $(repr(name)) is not a Julia identifier, \
+                so it cannot be exported"))
+        push!(lines, "const $name = " * exprstring(contextexpr(s.contexts[name])))
+    end
+    return lines
+end
+
+contextexpr(ctx::Context) = Expr(:call, :Context, timeexpr(ctx.start), timeexpr(ctx.stop))
+
+timeexpr(t::Integer) = t
+timeexpr(t::AbstractFloat) = t
+timeexpr(t::Dates.Date) =
+    Expr(:call, :Date, Dates.year(t), Dates.month(t), Dates.day(t))
+function timeexpr(t::Dates.DateTime)
+    parts = Any[Dates.year(t), Dates.month(t), Dates.day(t), Dates.hour(t),
+        Dates.minute(t), Dates.second(t), Dates.millisecond(t)]
+    while length(parts) > 3 && last(parts) == 0
+        pop!(parts)
+    end
+    return Expr(:call, :DateTime, parts...)
+end
+timeexpr(t) =
+    throw(ArgumentError("cannot export a context whose time is a $(typeof(t))"))
+
+# The tables the graph names, in the order its nodes name them.
+function tablenames(g::Graph)
+    names = String[]
+    for id in topoorder(g)
+        node = g.nodes[id]
+        kind = nodekind(node.kind)
+        kind isa OpKind || continue
+        for spec in kind.params
+            spec.type === :table || continue
+            name = get(node.params, spec.name, nothing)
+            name isa AbstractString && !(name in names) && push!(names, String(name))
+        end
+    end
+    return names
+end
+
+function tablelines(names, tablemode::Symbol, snapshots)
+    isempty(names) && return String[]
+    for name in names
+        Base.isidentifier(name) ||
+            throw(ArgumentError("table name $(repr(name)) is not a Julia identifier, \
+                so it cannot be exported"))
+    end
+    tablemode === :snapshot || return [
+        "# `tables`: supplied by the caller, with a field per table — " *
+        join(names, ", "),
+    ]
+    # One field per line: a snapshot's expression carries a path, and a row of
+    # them on one line is neither readable nor diffable.
+    lines = ["const SCRIPTDIR = @__DIR__", "tables = (;"]
+    for name in names
+        push!(lines, "    $name = " * exprstring(tableexpr(snapshots[name])) * ",")
+    end
+    push!(lines, ")")
+    return lines
+end
+
+function loadlines(s::Session, wanted, bindings, ctxname::String, writes)
+    g = s.graph
+    lines = String[]
+    for (id, port) in wanted
+        haskey(bindings, (id, port)) || continue
+        push!(lines,
+            exprstring(
+                Expr(:(=), framename(g, id, port),
+                    Expr(:call, :load, Symbol(ctxname), bindings[(id, port)])),
+            ))
+    end
+    for (id, port) in writes
+        push!(lines, "# scan($ctxname, $(bindings[(id, port)]))  # runs the write")
+    end
+    return lines
+end
