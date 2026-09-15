@@ -224,6 +224,8 @@ const BACKEND = Param("backend", :enum; choices = ["auto", "duckdb", "parquet2"]
     default = "auto")
 const SORT = Param("sort", :boolean; default = false,
     description = "sort the rows by time, for a file not stored in time order")
+const CLOSED = Param("closed", :boolean; default = false,
+    description = "keep the rows at stop")
 
 register_nodekind!(
     OpKind("readcsv"; category = "files",
@@ -240,6 +242,7 @@ register_nodekind!(
             Param("rename", :code),
             Param("delim", :string),
             SORT,
+            CLOSED,
             Param("chunkbytes", :integer; default = 4 * 1024 * 1024),
         ],
         build = (params, inputs, env) ->
@@ -247,7 +250,8 @@ register_nodekind!(
                 out = readcsv(params["path"]; types = paramcode(env, params, "types"),
                     time = paramcode(env, params, "time"),
                     rename = paramcode(env, params, "rename"), delim = params["delim"],
-                    sort = params["sort"], chunkbytes = params["chunkbytes"])
+                    sort = params["sort"], closed = params["closed"],
+                    chunkbytes = params["chunkbytes"])
             )),
 )
 
@@ -262,12 +266,13 @@ register_nodekind!(
 register_nodekind!(
     OpKind("readparquet"; category = "files",
         doc = "Read a parquet file.",
-        params = [PATH, Param("time", :code), Param("rename", :code), SORT, BACKEND],
+        params = [PATH, Param("time", :code), Param("rename", :code), SORT, CLOSED,
+            BACKEND],
         build = (params, inputs, env) ->
             (;
                 out = readparquet(params["path"]; time = paramcode(env, params, "time"),
                     rename = paramcode(env, params, "rename"), sort = params["sort"],
-                    backend = Symbol(params["backend"]))
+                    closed = params["closed"], backend = Symbol(params["backend"]))
             )),
 )
 
@@ -292,8 +297,9 @@ register_nodekind!(
 register_nodekind!(
     OpKind("readjls"; category = "files",
         doc = "Read a file written by writejls.",
-        params = [PATH],
-        build = (params, inputs, env) -> (; out = readjls(params["path"]))),
+        params = [PATH, CLOSED],
+        build = (params, inputs, env) ->
+            (; out = readjls(params["path"]; closed = params["closed"]))),
 )
 
 register_nodekind!(
