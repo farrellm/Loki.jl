@@ -37,8 +37,9 @@ end
     kinds = ["emptyframe", "clock", "concatenate", "merge", "table", "readcsv",
         "writecsv", "readparquet", "writeparquet", "readjls", "writejls", "filterrows",
         "addcolumns", "selectcolumns", "dropcolumns", "reordercolumns", "lag", "head",
-        "settime", "lastrow", "forwardfill", "fillmissing", "summarize",
+        "settime", "lastrow", "sortcycles", "forwardfill", "fillmissing", "summarize",
         "summarizecycles", "addsummarycolumns", "addrollingcolumns", "asofjoin",
+        "lookupjoin",
         "intervalize", "summarizewindows", "applymodels", "addpredictions",
         "modelreports", "lead", "futurejoin", "acausal_settime", "lags", "difference",
         "logtransform", "boxcox", "ema", "macd", "ar", "fitarma", "applyarma", "arma",
@@ -59,7 +60,11 @@ end
     env = Loki.BuildEnv(;
         contexts = Dict("analysis" => Context(0, 100), "train" => Context(0, 61)),
         tables = Dict("df" => df, "ts" => ts, "a" => df[1:5, :], "b" => df[6:10, :],
-            "quotes" => DataFrame(time = [0, 5], q = [1.0, 2.0])))
+            "quotes" => DataFrame(time = [0, 5], q = [1.0, 2.0]),
+            "dim" => DataFrame(k = [1, 3], label = ["one", "three"]),
+            "cycles" =>
+                DataFrame(time = [1, 1, 1, 2, 2], s = ["b", "c", "a", "z", "y"],
+                    v = [2, 3, 1, 5, 4])))
     b(kind, params = Dict{String,Any}(); inputs...) =
         Loki.build(Loki.nodekind(kind), params, Dict{Symbol,Any}(inputs), env)
     ctx = Context(0, 100)
@@ -84,6 +89,20 @@ end
     src = b("table", Dict("table" => "df")).out
 
     @testset "rows and columns" begin
+        cyc = b("table", Dict("table" => "cycles")).out
+        bycolumn = latest(ctx, b("sortcycles", Dict("columns" => "s"); in = cyc).out)
+        @test bycolumn.time == [1, 1, 1, 2, 2]
+        @test bycolumn.s == ["a", "b", "c", "y", "z"]
+        @test latest(ctx,
+            b("sortcycles", Dict("function" => "r -> -r.v"); in = cyc).out).v ==
+              [3, 2, 1, 5, 4]
+        @test latest(ctx,
+            b("sortcycles", Dict("columns" => ["s"], "rev" => true); in = cyc).out).s ==
+              ["c", "b", "a", "z", "y"]
+        @test_throws ArgumentError b("sortcycles"; in = cyc)
+        @test_throws ArgumentError b("sortcycles",
+            Dict("columns" => "s", "function" => "r -> r.v"); in = cyc)
+
         @test latest(
             ctx,
             b("filterrows", Dict("predicate" => "r -> r.x > 5"); in = src).out,
@@ -202,12 +221,36 @@ end
                 Dict("summarizers" => count1, "lookback" => "5"); data = src, clock = clk).out,
         ).count ==
               [0, 4, 5]
+
+        # a declared keyset: every close emits every key, 3 never occurring
+        dense = Dict("summarizers" => count1, "key" => "k", "keyset" => "[1, 2, 3]")
+        cycles = latest(ctx, b("summarizecycles", dense; in = src).out)
+        @test cycles.k == repeat([1, 2, 3], 10)
+        @test cycles.count == reduce(vcat, [isodd(t) ? [1, 0, 0] : [0, 1, 0] for t in 1:10])
+        intervals = latest(Context(0, 12),
+            b("intervalize", dense; data = src, clock = clk).out)
+        @test intervals.k == repeat([1, 2, 3], 2)
+        @test intervals.count == [2, 2, 0, 3, 2, 0]
+        @test latest(Context(0, 12),
+            b("summarizewindows", merge(dense, Dict("lookback" => "5"));
+                data = src, clock = clk).out).count == [0, 0, 0, 2, 2, 0, 3, 2, 0]
     end
 
     @testset "joins, files, models, acausal" begin
         quotes = b("table", Dict("table" => "quotes")).out
         @test latest(ctx, b("asofjoin"; left = src, right = quotes).out).q ==
               [1, 1, 1, 1, 2, 2, 2, 2, 2, 2]
+        looked =
+            latest(ctx, b("lookupjoin", Dict("table" => "dim", "key" => "k"); in = src).out)
+        @test isequal(looked.label, [isodd(t) ? "one" : missing for t in 1:10])
+        dropped = latest(ctx,
+            b("lookupjoin", Dict("table" => "dim", "key" => "k", "unmatched" => "drop");
+                in = src).out)
+        @test dropped.time == 1:2:9
+        @test dropped.label == fill("one", 5)
+        # a lookup table is timeless
+        @test_throws ArgumentError b("lookupjoin", Dict("table" => "quotes", "key" => "q");
+            in = src)
         future = latest(ctx, b("futurejoin"; left = src, right = quotes).out)
         @test future.q[1:5] == fill(2.0, 5)
         @test all(ismissing, future.q[6:10])
@@ -230,6 +273,25 @@ end
         pq = joinpath(dir, "x.parquet")
         scan(ctx, b("writeparquet", Dict("path" => pq); in = src).out)
         @test latest(ctx, b("readparquet", Dict("path" => pq)).out).x == df.x
+        # files not stored in time order, read with sort
+        unsortedcsv = joinpath(dir, "unsorted.csv")
+        write(unsortedcsv, "time,x\n3,3.0\n1,1.0\n2,2.0\n")
+        @test latest(ctx,
+            b("readcsv",
+                Dict("path" => unsortedcsv, "sort" => true,
+                    "types" => "Dict(:time => Int, :x => Float64)")).out).x == [1.0, 2.0, 3.0]
+        unsortedpq = joinpath(dir, "unsorted.parquet")
+        db = Loki.DuckDB.DB()
+        Loki.DuckDB.DBInterface.execute(db,
+            "COPY (SELECT * FROM (VALUES (3, 3.0::DOUBLE), (1, 1.0::DOUBLE), \
+            (2, 2.0::DOUBLE)) t(time, x)) TO '$unsortedpq' (FORMAT PARQUET)")
+        close(db)
+        for backend in ("duckdb", "parquet2")
+            @test latest(ctx,
+                b("readparquet",
+                    Dict("path" => unsortedpq, "sort" => true, "backend" => backend)).out).x ==
+                  [1.0, 2.0, 3.0]
+        end
         jls = joinpath(dir, "x.jls")
         scan(ctx, b("writejls", Dict("path" => jls); in = src).out)
         @test isequal(latest(ctx, b("readjls", Dict("path" => jls)).out), df)
