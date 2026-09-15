@@ -948,8 +948,9 @@ loads CausalFrames' three extensions and every operator in the catalog is
 available without the user knowing which package enables it. Also
 StateSpaceModels (with MatrixEquations, already its dependency, for the filter's
 initial covariance), ModelContextProtocol, HTTP, JSON3, DataFrames, Tables,
-StatsBase, HypothesisTests, PrecompileTools, and the `Dates`, `LinearAlgebra`
-and `Serialization` stdlibs. StateSpaceModels is imported as a module alias
+StatsBase, HypothesisTests, PrecompileTools, and the `Dates` and
+`LinearAlgebra` stdlibs. Table snapshots go through CausalFrames' own file
+operators, so Loki never reaches for `Serialization` itself. StateSpaceModels is imported as a module alias
 (`SSM`), never `using`'d: its `LinearRegression` clashes with CausalFrames'.
 
 The consequences are deliberate. Load time is higher than CausalFrames' own,
@@ -1008,9 +1009,11 @@ source of truth for the design.
 1. Loki's time-series operators, `insample`, the fit node's two ports, the
    graph, and the engine — usable headless from the REPL. *Done:* every
    operator in the catalog above, the node registry and graph, the session's
-   user code, and the engine and cache behind a headless `Session`; `emit`
-   arrives with Milestone 2.
-2. Export and persistence.
+   user code, and the engine and cache behind a headless `Session`.
+2. Export and persistence. *Done:* `emit` on every node kind and Loki's own
+   script printer, `exportjulia` with table snapshots, and
+   `savesession`/`opensession` for `.loki.json`. Including an exported script
+   reproduces the session's frames, and the emitted text is golden-tested.
 3. The server and web app, with diagnostics and the residual panel.
 4. MCP mode.
 5. Breadth: seasonal models in the UI, more diagnostics, undo and redo.

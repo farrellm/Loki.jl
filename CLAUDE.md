@@ -6,8 +6,9 @@ of the graph as a plain Julia script.
 
 **DESIGN.md is the source of truth for the design and must be kept in sync
 with any API or semantics change.** Its "Milestones" section is the roadmap;
-Milestones 0 (scaffolding) and 1 (operators, `insample`, graph, engine) are
-done, Milestone 2 (export and persistence) is next.
+Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine) and 2
+(`emit`, `exportjulia`, table snapshots, `.loki.json`) are done, Milestone 3
+(the server and web app, with diagnostics) is next.
 
 ## Commands
 
@@ -26,6 +27,10 @@ done, Milestone 2 (export and persistence) is next.
   pins JuliaFormatter v2, so don't format with a v1 install)
 - Run one Julia process at a time — concurrent test/docs runs race on the
   precompile cache and fail transiently
+- Golden files live in `test/golden/` and end in `.jl.txt`, not `.jl`: the
+  formatting hook rewrites every modified `*.jl`, and a golden script has to
+  stay exactly as the exporter printed it. Regenerate with
+  `LOKI_UPDATE_GOLDEN=1 julia --project -e 'using Pkg; Pkg.test()'`
 - Add a dependency: `julia --project -e 'using Pkg; Pkg.add("Name")'`, then a
   `[compat]` entry (Aqua checks it). Julia 1.12's `Pkg.add` writes its own
   `[compat]` line too — remove the duplicate. Test-only deps go in `[extras]`
