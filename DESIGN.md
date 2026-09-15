@@ -883,24 +883,31 @@ frames for the same nodes. That is a test, not a hope.
 
 ## Persistence
 
-A session saves to a `.loki.json` file:
+`savesession(path, session)` writes a `.loki.json` file, and
+`opensession(path)` reads one back:
 
 ```json
 {
   "format": "loki", "version": 1,
   "contexts": { "analysis": { "timetype": "DateTime", "start": "2015-01-01T00:00:00", "stop": "2026-01-01T00:00:00" } },
   "prelude": "",
+  "nextid": 7,
   "nodes": [ { "id": "n3", "kind": "difference", "params": { "column": "close_log", "order": 1, "lag": 1 }, "position": [420, 180] } ],
-  "edges": [ { "from": ["n2", "out"], "to": ["n3", "in"] } ],
-  "tables": [ { "name": "prices", "path": "prices.parquet" } ]
+  "edges": [ { "id": "e4", "from": ["n2", "out"], "to": ["n3", "in"] } ],
+  "tables": [ { "name": "prices", "path": "analysis.tables/prices.parquet", "format": "parquet", "frame": false } ]
 }
 ```
 
 The header is the JLS file's precedent: a foreign or future file is reported as
 such, not as a parse failure. No data is stored in the session file; tables are
-referenced by path, and saving a session with uploaded tables writes them
-alongside. Parameters hold source text, never evaluated values, so a session
-file is as portable as the exported script.
+referenced by path, and saving a session writes each one into a `<stem>.tables/`
+directory beside it, as an exported script's snapshots are written beside the
+script (see "Export") — a frozen frame carries the context it is read back over.
+Parameters hold source text, never evaluated values, so a session file is as
+portable as the exported script. The graph's next id is saved with it, so an id
+freed before saving is not handed out again after opening; opening adds every
+node and edge through the session's own commands, so a file with a parameter the
+kind does not accept fails on that node rather than silently.
 
 ## Module layout
 

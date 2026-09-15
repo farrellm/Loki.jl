@@ -71,6 +71,13 @@ Loki.savetable
 Loki.loadtable
 ```
 
+## Persistence
+
+```@docs
+Loki.savesession
+Loki.opensession
+```
+
 ## User code
 
 ```@docs

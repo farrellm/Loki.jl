@@ -15,6 +15,7 @@ using Parquet2: Parquet2
 # Imported, not used: MLJModelInterface re-exports the scientific types, and its
 # `Count` would clash with CausalFrames' summarizer.
 import MLJModelInterface
+using JSON3: JSON3
 using PrecompileTools: @setup_workload, @compile_workload
 
 using Dates: Dates
@@ -46,6 +47,7 @@ include("session.jl")
 # After the session: `exportjulia` takes one, and everything else here is reached
 # from a node kind's `emit` at run time.
 include("export.jl")
+include("persist.jl")
 include("precompile.jl")
 
 end

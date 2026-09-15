@@ -43,5 +43,7 @@
         # The exporter, printer and all: the first export otherwise costs a user
         # seconds of compilation. `:argument` writes nothing.
         exportjulia(session)
+        # Saving and opening covers the JSON and the table snapshots with it.
+        opensession(savesession(joinpath(dir, "precompile.loki.json"), session))
     end
 end
