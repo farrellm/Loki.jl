@@ -101,8 +101,12 @@ A node is a kind plus a `params` dictionary. A kind is registered with
   output port. `inputs[port]` is a pipeline, a vector of them for a variadic
   port, or `nothing` for an unconnected optional one; `env` resolves what
   parameters name — contexts, tables, and source text in the user module;
-- `emit(kind, params, inputvars) -> Vector{Expr}` — the script lines that
-  reproduce `build` (see "Export"; Milestone 2);
+- `emit(kind, params, inputs) -> NamedTuple` of `Expr`s, one per output port —
+  `build`'s shape with an expression in place of each pipeline, reproducing what
+  it builds. `inputs[port]` is the script binding a connected input is bound to
+  (a vector of them for a variadic port, `nothing` for an unconnected optional
+  one), and source text travels as a `Code` value the printer passes through
+  verbatim. A kind without `emit` cannot be exported (see "Export");
 - `isacausal(kind, params, port) -> Bool` (default `false`), per output port, so
   the fit node's `model` port stays causal while its `insample` port is not;
 - `iswrite(kind) -> Bool` (default `false`), marking the file sinks a run never

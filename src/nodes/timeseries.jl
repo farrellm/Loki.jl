@@ -7,6 +7,11 @@ const OUTNAME = Param("name", :column; description = "the output column (or pref
 namekw(params::AbstractDict) =
     params["name"] === nothing ? (;) : (; name = Symbol(params["name"]))
 
+emitnamekw(params::AbstractDict) =
+    params["name"] === nothing ? (;) : (; name = QuoteNode(Symbol(params["name"])))
+
+emitseries(params::AbstractDict) = QuoteNode(Symbol(params["column"]))
+
 register_nodekind!(
     OpKind("lags"; category = "time series",
         doc = "The previous p values of a column, as row lags.",
@@ -16,6 +21,12 @@ register_nodekind!(
             (;
                 out = inputs[:in] |> lags(Symbol(params["column"]), params["p"];
                     key = paramkey(params["key"]), namekw(params)...)
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:lags, emitseries(params), params["p"];
+                        key = emitkey(params["key"]), emitnamekw(params)...))
             )),
 )
 
@@ -34,6 +45,14 @@ register_nodekind!(
                     order = params["order"], lag = params["lag"],
                     key = paramkey(params["key"]),
                     namekw(params)...)
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:difference, emitseries(params);
+                        order = unless(params["order"], 1),
+                        lag = unless(params["lag"], 1), key = emitkey(params["key"]),
+                        emitnamekw(params)...))
             )),
 )
 
@@ -45,6 +64,11 @@ register_nodekind!(
             (;
                 out = inputs[:in] |>
                       logtransform(Symbol(params["column"]); namekw(params)...)
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:logtransform, emitseries(params); emitnamekw(params)...))
             )),
 )
 
@@ -57,6 +81,12 @@ register_nodekind!(
             (;
                 out = inputs[:in] |> boxcox(Symbol(params["column"]);
                     lambda = params["lambda"], namekw(params)...)
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:boxcox, emitseries(params); lambda = params["lambda"],
+                        emitnamekw(params)...))
             )),
 )
 
@@ -75,6 +105,13 @@ register_nodekind!(
                     halflife = paramcode(env, params, "halflife"),
                     key = paramkey(params["key"]),
                     namekw(params)...)
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:ema, emitseries(params); span = params["span"],
+                        halflife = emitcode(params, "halflife"),
+                        key = emitkey(params["key"]), emitnamekw(params)...))
             )),
 )
 
@@ -95,6 +132,15 @@ register_nodekind!(
                     slow = params["slow"], signal = params["signal"],
                     name = Symbol(params["name"]),
                     key = paramkey(params["key"]))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:macd, emitseries(params); fast = unless(params["fast"], 12),
+                        slow = unless(params["slow"], 26),
+                        signal = unless(params["signal"], 9),
+                        name = emitsym(unless(params["name"], "macd")),
+                        key = emitkey(params["key"])))
             )),
 )
 
@@ -108,6 +154,13 @@ register_nodekind!(
             (;
                 out = inputs[:in] |> ar(Symbol(params["column"]), params["p"];
                     key = paramkey(params["key"]), name = Symbol(params["name"]))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:ar, emitseries(params), params["p"];
+                        key = emitkey(params["key"]),
+                        name = emitsym(unless(params["name"], "ar"))))
             )),
 )
 
@@ -119,6 +172,13 @@ const INCLUDEMEAN = Param("include_mean", :boolean; default = false)
 armaspec(params::AbstractDict) = (; order = Tuple(params["order"]),
     seasonal_order = Tuple(params["seasonal_order"]),
     include_mean = params["include_mean"])
+
+function emitarmaspec(params::AbstractDict)
+    seasonal = unless(collect(params["seasonal_order"]), [0, 0, 0, 0])
+    return (; order = Expr(:tuple, params["order"]...),
+        seasonal_order = seasonal === nothing ? nothing : Expr(:tuple, seasonal...),
+        include_mean = unless(params["include_mean"], false))
+end
 
 register_nodekind!(
     OpKind("fitarma"; category = "time series",
@@ -132,6 +192,13 @@ register_nodekind!(
                 out = inputs[:in] |>
                       fitarma(Symbol(params["column"]); armaspec(params)...,
                     name = Symbol(params["name"]), key = paramkey(params["key"]))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:fitarma, emitseries(params); emitarmaspec(params)...,
+                        name = emitsym(unless(params["name"], "model")),
+                        key = emitkey(params["key"])))
             )),
 )
 
@@ -153,6 +220,16 @@ register_nodekind!(
                     tolerance = paramcode(env, params, "tolerance"),
                     strict = params["strict"],
                     horizon = params["horizon"], namekw(params)...)
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:data],
+                    opcall(:applyarma, inputs[:models], emitseries(params);
+                        column = emitsym(unless(params["model"], "model")),
+                        key = emitkey(params["key"]),
+                        tolerance = emitcode(params, "tolerance"),
+                        strict = unless(params["strict"], false),
+                        horizon = unless(params["horizon"], 0), emitnamekw(params)...))
             )),
 )
 
@@ -171,6 +248,14 @@ register_nodekind!(
                     Symbol(params["column"]); armaspec(params)...,
                     key = paramkey(params["key"]),
                     horizon = params["horizon"], namekw(params)...)
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:data],
+                    opcall(:arma, inputs[:clock], emitrequiredcode(params, "lookback"),
+                        emitseries(params); emitarmaspec(params)...,
+                        key = emitkey(params["key"]),
+                        horizon = unless(params["horizon"], 0), emitnamekw(params)...))
             )),
 )
 
@@ -197,6 +282,21 @@ register_nodekind!(
                       fitonce(namedcontext(env, params["context"]), only(ss);
                     key = paramkey(params["key"]))
             )
+        end,
+        emit = (params, inputs) -> begin
+            entries = params["summarizer"]
+            checkentries(entries)
+            length(entries) == 1 ||
+                throw(
+                    ArgumentError(
+                        "fitonce takes exactly one summarizer, got $(length(entries))",
+                    ),
+                )
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:fitonce, emitcontext(params["context"]),
+                        emitsummarizer(only(entries)); key = emitkey(params["key"])))
+            )
         end),
 )
 
@@ -219,7 +319,8 @@ register_nodekind!(
                 description = "fit over this named context instead of the run's"),
             KEY,
         ],
-        build = (params, inputs, env) -> buildfit(params, inputs, env)),
+        build = (params, inputs, env) -> buildfit(params, inputs, env),
+        emit = (params, inputs) -> emitfit(params, inputs)),
 )
 
 function buildfit(params::AbstractDict, inputs::AbstractDict, env::BuildEnv)
@@ -254,4 +355,46 @@ function fitports(p::CausalPipeline, s::Summarizer, fitcontext, key)
         fitcontext === nothing ? fitinput(s, p) |> summarize(s; key) :
         fitinput(s, p) |> fitonce(fitcontext, s; key)
     return (; model, insample = p |> Acausal.insample(s; fitcontext, key))
+end
+
+# The same two ports as script text. The summarizer is inlined into each call it
+# appears in: a pipeline is a value, so constructing it twice changes nothing but
+# the reading, and it keeps the script to one binding per port.
+function emitfit(params::AbstractDict, inputs::AbstractDict)
+    p = inputs[:in]
+    column = QuoteNode(Symbol(params["column"]))
+    key = emitkey(params["key"])
+    fitcontext =
+        params["fitcontext"] === nothing ? nothing : emitcontext(params["fitcontext"])
+    family = params["family"]
+    if family == "arma"
+        params["order"] === nothing && throw(ArgumentError("an arma fit needs order"))
+        return emitfitports(p, opcall(:FitARMA, column; emitarmaspec(params)...),
+            fitcontext, key)
+    elseif family == "ar"
+        order = params["p"]
+        order === nothing && throw(ArgumentError("an ar fit needs p"))
+        lagcols = columnexprs(lagnames(Symbol(params["column"], :_lag), order))
+        s = opcall(:LinearRegression, Expr(:vect, lagcols...), column;
+            name = QuoteNode(:ar))
+        lagged = emitpipe(p, opcall(:lags, column, order; key))
+        ports = emitfitports(lagged, s, fitcontext, key)
+        return (; model = ports.model,
+            insample = emitpipe(ports.insample, opcall(:dropcolumns, lagcols...)))
+    end
+    predictors = paramcolumns(params["predictors"])
+    isempty(predictors) && throw(ArgumentError("an mlj fit needs predictors"))
+    s = opcall(:FitModel, emitrequiredcode(params, "model"),
+        Expr(:vect, columnexprs(predictors)...), column; name = QuoteNode(:model))
+    return emitfitports(p, s, fitcontext, key)
+end
+
+function emitfitports(p, s, fitcontext, key)
+    input = opcall(qualified(:Loki, :fitinput), s, p)
+    model =
+        fitcontext === nothing ? emitpipe(input, opcall(:summarize, s; key)) :
+        emitpipe(input, opcall(:fitonce, fitcontext, s; key))
+    # `insample` is imported by name at the top of the script, which is where the
+    # acausal dependence is meant to be visible.
+    return (; model, insample = emitpipe(p, opcall(:insample, s; fitcontext, key)))
 end

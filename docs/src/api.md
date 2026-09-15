@@ -58,6 +58,15 @@ Loki.nodekind
 Loki.nodekinds
 ```
 
+## Export
+
+```@docs
+Loki.emit
+Loki.canemit
+Loki.Code
+Loki.exprstring
+```
+
 ## User code
 
 ```@docs
