@@ -153,13 +153,17 @@ Every exported CausalFrames operator is a node kind, one to one, with its
 keyword arguments as parameters: the sources (`emptyframe`, `clock`,
 `concatenate`, `merge`, `readtable`), file I/O (`readcsv`, `writecsv`,
 `readparquet`, `writeparquet`, `readjls`, `writejls`), the row and column
-transforms, the summarizing transforms (a summarizer list is a structured
-parameter — a list of `{summarizer, columns, options}` entries), `asofjoin`,
-the fills, and the model operators (`applymodels`, `addpredictions`,
-`modelreports`). Multi-input operators become multi-port nodes: `asofjoin`
+transforms (`sortcycles` among them), the summarizing transforms (a summarizer
+list is a structured parameter — a list of `{summarizer, columns, options}`
+entries), the joins (`asofjoin`, `lookupjoin`), the fills, and the model
+operators (`applymodels`, `addpredictions`, `modelreports`). Multi-input
+operators become multi-port nodes: `asofjoin`
 (`left`, `right`), `intervalize` and `summarizewindows` (`data`, `clock`),
 `addrollingcolumns` (`data`, optional `from`), `applymodels` (`data`,
-`models`), `merge` and `concatenate` (one variadic port, ordered).
+`models`), `merge` and `concatenate` (one variadic port, ordered). `lookupjoin`
+joins against a table rather than a pipeline, so it has one port and its
+`table` parameter names a session table (see "In-memory tables"); the table
+must have no `:time` column, so a frozen frame cannot be one.
 
 Parquet is always available, because Loki takes CausalFrames' optional
 dependencies as its own (see "Dependencies"); the `backend` parameter is
@@ -173,8 +177,12 @@ Parameters follow a few conventions, so every kind reads alike:
 - Column names are strings; `key` is a name or a list of names.
 - Anything that is a Julia *value* rather than a name — an interval, a
   tolerance, a look-back, a predicate, a row function, `readcsv`'s type
-  dictionary, `fillmissing`'s values, `addrollingcolumns`' windows, an MLJ
-  model — is source text, passed to the operator exactly as evaluated.
+  dictionary, `fillmissing`'s values, `addrollingcolumns`' windows, the
+  declared `keyset` of `summarizecycles`, `intervalize` and
+  `summarizewindows`, an MLJ model — is source text, passed to the operator
+  exactly as evaluated.
+- `sortcycles`' `by` is split in two, like a column selection: `columns` by
+  name or a key `function` (source text), exactly one of them.
 - A column selection (`selectcolumns`, `dropcolumns`, `reordercolumns`,
   `forwardfill`) is `columns` by name plus an optional `match` expression, a
   `Regex` or a predicate on the name.

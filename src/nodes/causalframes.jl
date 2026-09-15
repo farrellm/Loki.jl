@@ -222,6 +222,8 @@ const PATH = Param("path", :string; required = true)
 const QUEUE = Param("queue", :integer; default = 1)
 const BACKEND = Param("backend", :enum; choices = ["auto", "duckdb", "parquet2"],
     default = "auto")
+const SORT = Param("sort", :boolean; default = false,
+    description = "sort the rows by time, for a file not stored in time order")
 
 register_nodekind!(
     OpKind("readcsv"; category = "files",
@@ -237,6 +239,7 @@ register_nodekind!(
             ),
             Param("rename", :code),
             Param("delim", :string),
+            SORT,
             Param("chunkbytes", :integer; default = 4 * 1024 * 1024),
         ],
         build = (params, inputs, env) ->
@@ -244,7 +247,7 @@ register_nodekind!(
                 out = readcsv(params["path"]; types = paramcode(env, params, "types"),
                     time = paramcode(env, params, "time"),
                     rename = paramcode(env, params, "rename"), delim = params["delim"],
-                    chunkbytes = params["chunkbytes"])
+                    sort = params["sort"], chunkbytes = params["chunkbytes"])
             )),
 )
 
@@ -259,11 +262,11 @@ register_nodekind!(
 register_nodekind!(
     OpKind("readparquet"; category = "files",
         doc = "Read a parquet file.",
-        params = [PATH, Param("time", :code), Param("rename", :code), BACKEND],
+        params = [PATH, Param("time", :code), Param("rename", :code), SORT, BACKEND],
         build = (params, inputs, env) ->
             (;
                 out = readparquet(params["path"]; time = paramcode(env, params, "time"),
-                    rename = paramcode(env, params, "rename"),
+                    rename = paramcode(env, params, "rename"), sort = params["sort"],
                     backend = Symbol(params["backend"]))
             )),
 )
@@ -375,6 +378,28 @@ register_nodekind!(
 )
 
 register_nodekind!(
+    OpKind("sortcycles"; category = "rows",
+        doc = "Stably reorder the rows sharing each timestamp.",
+        inputs = ONEINPUT,
+        params = [
+            Param("columns", :columns; description = "sort key column(s)"),
+            Param("function", :code;
+                description = "a per-row sort key, e.g. `r -> (-r.votes, r.id)`"),
+            Param("rev", :boolean; default = false),
+        ],
+        build = (params, inputs, env) ->
+            (; out = inputs[:in] |> sortcycles(sortkey(env, params); rev = params["rev"]))),
+)
+
+# `sortcycles`' `by`: the named columns or a key function, exactly one of them.
+function sortkey(env::BuildEnv, params::AbstractDict)
+    (params["columns"] === nothing) == (params["function"] === nothing) &&
+        throw(ArgumentError("sort by columns or by a function, exactly one of them"))
+    params["columns"] === nothing && return paramcode(env, params, "function")
+    return paramcolumns(params["columns"])
+end
+
+register_nodekind!(
     OpKind("forwardfill"; category = "rows",
         doc = "Replace missing values in the selected columns with the last seen value.",
         inputs = ONEINPUT, params = [SELECTION..., KEY, Param("tolerance", :code)],
@@ -399,9 +424,12 @@ register_nodekind!(
 
 # --- summarizing -----------------------------------------------------------------------
 
+const KEYSET = Param("keyset", :code;
+    description = "the declared key values, e.g. `[\"a\", \"b\"]` or `[(1, \"a\"), (2, \"b\")]`, \
+        making keyed output dense")
+
 for (name, op, doc) in (
     ("summarize", summarize, "One summary row (per key) at the window's stop."),
-    ("summarizecycles", summarizecycles, "One summary row per timestamp (and key)."),
     ("addsummarycolumns", addsummarycolumns, "Running summaries appended to each row."),
 )
     register_nodekind!(
@@ -414,6 +442,19 @@ for (name, op, doc) in (
                 )),
     )
 end
+
+register_nodekind!(
+    OpKind("summarizecycles"; category = "summarizing",
+        doc = "One summary row per timestamp (and key).",
+        inputs = ONEINPUT, params = [SUMMARIZERLIST, KEY, KEYSET],
+        build = (params, inputs, env) ->
+            (;
+                out = inputs[:in] |>
+                      summarizecycles(summarizers(env, params["summarizers"]);
+                    key = paramkey(params["key"]),
+                    keyset = paramcode(env, params, "keyset"))
+            )),
+)
 
 register_nodekind!(
     OpKind("addrollingcolumns"; category = "summarizing",
@@ -433,11 +474,17 @@ register_nodekind!(
     OpKind("intervalize"; category = "summarizing",
         doc = "Summaries over the intervals between clock ticks.",
         inputs = [Port(:data), Port(:clock)],
-        params = [SUMMARIZERLIST, KEY, Param("closelast", :boolean; default = false)],
+        params = [
+            SUMMARIZERLIST,
+            KEY,
+            KEYSET,
+            Param("closelast", :boolean; default = false),
+        ],
         build = (params, inputs, env) ->
             (;
                 out = inputs[:data] |> intervalize(inputs[:clock],
                     summarizers(env, params["summarizers"]); key = paramkey(params["key"]),
+                    keyset = paramcode(env, params, "keyset"),
                     closelast = params["closelast"])
             )),
 )
@@ -446,13 +493,14 @@ register_nodekind!(
     OpKind("summarizewindows"; category = "summarizing",
         doc = "Summaries over a trailing window at each clock tick.",
         inputs = [Port(:data), Port(:clock)],
-        params = [Param("lookback", :code; required = true), SUMMARIZERLIST, KEY],
+        params = [Param("lookback", :code; required = true), SUMMARIZERLIST, KEY, KEYSET],
         build = (params, inputs, env) ->
             (;
                 out = inputs[:data] |> summarizewindows(inputs[:clock],
                     requiredcode(env, params, "lookback"),
                     summarizers(env, params["summarizers"]);
-                    key = paramkey(params["key"]))
+                    key = paramkey(params["key"]),
+                    keyset = paramcode(env, params, "keyset"))
             )),
 )
 
@@ -479,6 +527,27 @@ register_nodekind!(
         build = (params, inputs, env) ->
             (; out = inputs[:left] |> asofjoin(inputs[:right]; joinkwargs(env, params)...)),
     ),
+)
+
+register_nodekind!(
+    OpKind("lookupjoin"; category = "joins",
+        doc = "Join each row to the row with the same key in a session table without time.",
+        inputs = ONEINPUT,
+        params = [
+            Param("table", :table; required = true),
+            Param("key", :columns; required = true, description = "key column(s)"),
+            Param("unmatched", :enum; choices = ["missing", "error", "drop"],
+                default = "missing"),
+            Param("leftprefix", :string),
+            Param("rightprefix", :string),
+        ],
+        build = (params, inputs, env) ->
+            (;
+                out = inputs[:in] |> lookupjoin(namedtable(env, params["table"]);
+                    key = paramkey(params["key"]),
+                    unmatched = Symbol(params["unmatched"]),
+                    leftprefix = params["leftprefix"], rightprefix = params["rightprefix"])
+            )),
 )
 
 # --- models ----------------------------------------------------------------------------
