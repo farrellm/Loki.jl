@@ -295,6 +295,19 @@ end
         jls = joinpath(dir, "x.jls")
         scan(ctx, b("writejls", Dict("path" => jls); in = src).out)
         @test isequal(latest(ctx, b("readjls", Dict("path" => jls)).out), df)
+        # closed keeps the row at stop, which the half-open default drops
+        stoptimes(kind, params) = latest(Context(0, 10), b(kind, params).out).time
+        for closed in (false, true)
+            want = closed ? (1:10) : (1:9)
+            @test stoptimes("readcsv",
+                Dict("path" => csv, "closed" => closed,
+                    "types" => "Dict(:time => Int, :x => Float64)")) == want
+            for backend in ("duckdb", "parquet2")
+                @test stoptimes("readparquet",
+                    Dict("path" => pq, "closed" => closed, "backend" => backend)) == want
+            end
+            @test stoptimes("readjls", Dict("path" => jls, "closed" => closed)) == want
+        end
 
         clk = b("clock", Dict("interval" => "5")).out
         @test_throws ArgumentError b("addpredictions",
