@@ -29,6 +29,14 @@ mutable struct Session
     const errors::Dict{String,Exception}
     run::Union{Nothing,Run}
     const lock::ReentrantLock
+    const subscribers::Vector{Subscriber}
+    seq::Int
+    # Set while a batch of edits replays into the session — opening a file — so a
+    # hundred `addnode!`s are one `graph_changed` rather than a hundred.
+    quiet::Bool
+    # The web server, once there is one. Untyped for the same reason
+    # `Compilation.cache` is: it is defined later than this.
+    server::Any
 end
 
 function Session(; tables = (;), contexts = (;), prelude::AbstractString = "",
@@ -37,7 +45,80 @@ function Session(; tables = (;), contexts = (;), prelude::AbstractString = "",
         Dict{String,Context}(String(k) => v for (k, v) in pairs(contexts)),
         Dict{String,Any}(String(k) => v for (k, v) in pairs(tables)),
         UserCode(; prelude), ResultCache(cachebytes), Dict{String,Symbol}(),
-        Dict{String,Exception}(), nothing, ReentrantLock())
+        Dict{String,Exception}(), nothing, ReentrantLock(), Subscriber[], 0, false,
+        nothing)
+end
+
+# --- events ---------------------------------------------------------------------
+
+"""
+    Loki.subscribe!(s::Session; buffer = 256) -> Loki.Subscriber
+
+Watch every change to the session. Read the returned [`Loki.Subscriber`](@ref)
+with [`Loki.nextevent`](@ref) or by iterating it, and end the subscription with
+[`Loki.unsubscribe!`](@ref) — which a watcher must do, or its queue fills and
+its events are dropped.
+"""
+function subscribe!(s::Session; buffer::Integer = 256)
+    return lock(s.lock) do
+        sub = Subscriber(length(s.subscribers) + 1, buffer)
+        push!(s.subscribers, sub)
+        sub
+    end
+end
+
+"""
+    Loki.unsubscribe!(s::Session, sub::Loki.Subscriber) -> Session
+
+End a subscription and close its queue, which ends anything iterating it.
+"""
+function unsubscribe!(s::Session, sub::Subscriber)
+    lock(s.lock) do
+        filter!(x -> x !== sub, s.subscribers)
+    end
+    close(sub)
+    return s
+end
+
+"""
+    Loki.emit!(s::Session, kind::Symbol, payload::AbstractDict) -> Loki.Event
+
+Broadcast one change to every subscriber, attributed to
+[`Loki.currentorigin`](@ref). Offering is non-blocking, so this is safe to call
+with the session lock held — which is the point: events then carry the same
+order the mutations did.
+"""
+emit!(s::Session, kind::Symbol, payload::AbstractDict) =
+    emit!(s, kind, payload, currentorigin())
+
+function emit!(s::Session, kind::Symbol, payload::AbstractDict, origin::Symbol)
+    return lock(s.lock) do
+        e = Event(kind, origin, (s.seq += 1), time(),
+            Dict{String,Any}(String(k) => v for (k, v) in pairs(payload)))
+        s.quiet && return e
+        for sub in s.subscribers
+            offer!(sub, e)
+        end
+        e
+    end
+end
+
+# A graph edit: what changed, and which nodes it invalidated (the client marks
+# those idle rather than receiving one status event per node).
+graphchanged!(s::Session, change::AbstractString; kwargs...) =
+    emit!(s, :graph_changed,
+        Dict{String,Any}("change" => change,
+            (String(k) => v for (k, v) in pairs(kwargs))...))
+
+function statuschanged!(s::Session, id::AbstractString)
+    err = get(s.errors, String(id), nothing)
+    return emit!(s, :node_status,
+        Dict{String,Any}("id" => String(id),
+            "status" => String(get(s.status, String(id), :idle)),
+            "error" => err === nothing ? nothing :
+                       Dict{String,Any}(
+                "node" => err isa NodeError ? err.id : String(id),
+                "message" => sprint(showerror, err))))
 end
 
 buildenv(s::Session) = BuildEnv(s.usercode, s.contexts, s.tables)
@@ -52,6 +133,7 @@ Define or replace the named context `name`.
 function setcontext!(s::Session, name::AbstractString, ctx::Context)
     lock(s.lock) do
         s.contexts[String(name)] = ctx
+        graphchanged!(s, "setcontext"; name = String(name), context = contextevent(ctx))
     end
     return s
 end
@@ -65,8 +147,20 @@ Hold `table` — any Tables.jl table, or a loaded `CausalFrame` — under `name`
 function addtable!(s::Session, name::AbstractString, table)
     lock(s.lock) do
         s.tables[String(name)] = table
+        graphchanged!(s, "addtable"; name = String(name), table = tableevent(table))
     end
     return s
+end
+
+# A table without its rows: how many, and what columns.
+function tableevent(table)
+    table isa CausalFrame && return merge(frameevent(table),
+        Dict{String,Any}("frame" => true))
+    sch = Tables.schema(table)
+    rows = Tables.rowcount(Tables.columns(table))
+    return Dict{String,Any}("frame" => false, "rows" => rows,
+        "columns" => sch === nothing ? String[] : [String(n) for n in sch.names],
+        "types" => sch === nothing ? String[] : [string(T) for T in sch.types])
 end
 
 """
@@ -78,6 +172,9 @@ Replace the session's prelude of helper definitions; see
 function setprelude!(s::Session, prelude::AbstractString)
     lock(s.lock) do
         setprelude!(s.usercode, prelude)
+        # Every source-text parameter is re-evaluated, so everything that holds
+        # one is stale — which is every node, as far as the client need care.
+        graphchanged!(s, "setprelude"; invalidated = sort!(collect(keys(s.graph.nodes))))
     end
     return s
 end
@@ -99,14 +196,32 @@ function addnode!(s::Session, kind::AbstractString,
     params::AbstractDict = Dict{String,Any}();
     kwargs...)
     return lock(s.lock) do
-        addnode!(s.graph, kind, params; kwargs...)
+        nid = addnode!(s.graph, kind, params; kwargs...)
+        graphchanged!(s, "addnode"; id = nid, node = nodeevent(getnode(s.graph, nid)))
+        nid
     end
 end
 
 function updatenode!(s::Session, id::AbstractString, params::AbstractDict)
     lock(s.lock) do
         setparams!(s.graph, id, params)
-        invalidate!(s, String(id))
+        affected = invalidate!(s, String(id))
+        graphchanged!(s, "updatenode"; id = String(id),
+            node = nodeevent(getnode(s.graph, id)), invalidated = affected)
+    end
+    return s
+end
+
+"""
+    Loki.setposition!(s::Session, id, position) -> Session
+
+Move a node on the canvas. Positions play no part in evaluation, so this
+invalidates nothing — dragging a node does not throw its result away.
+"""
+function setposition!(s::Session, id::AbstractString, position)
+    lock(s.lock) do
+        node = setposition!(s.graph, id, position)
+        graphchanged!(s, "position"; id = node.id, node = nodeevent(node))
     end
     return s
 end
@@ -114,10 +229,11 @@ end
 function removenode!(s::Session, id::AbstractString)
     lock(s.lock) do
         getnode(s.graph, id)
-        invalidate!(s, String(id))
+        affected = invalidate!(s, String(id))
         removenode!(s.graph, id)
         delete!(s.status, id)
         delete!(s.errors, id)
+        graphchanged!(s, "removenode"; id = String(id), invalidated = affected)
     end
     return s
 end
@@ -125,7 +241,10 @@ end
 function connect!(s::Session, from, to; kwargs...)
     return lock(s.lock) do
         eid = connect!(s.graph, from, to; kwargs...)
-        invalidate!(s, String(to[1]))
+        affected = invalidate!(s, String(to[1]))
+        edge = s.graph.edges[findfirst(e -> e.id == eid, s.graph.edges)]
+        graphchanged!(s, "connect"; id = eid, edge = edgeevent(edge),
+            invalidated = affected)
         eid
     end
 end
@@ -133,12 +252,16 @@ end
 function disconnect!(s::Session, id::AbstractString)
     lock(s.lock) do
         i = findfirst(e -> e.id == id, s.graph.edges)
-        i === nothing || invalidate!(s, s.graph.edges[i].to[1])
+        affected = i === nothing ? String[] : invalidate!(s, s.graph.edges[i].to[1])
         disconnect!(s.graph, id)
+        graphchanged!(s, "disconnect"; id = String(id), invalidated = affected)
     end
     return s
 end
 
+# The nodes an edit made stale: the node itself and everything downstream. They
+# are reported as one list on the `graph_changed` event rather than as a status
+# event each, which would be dozens of messages for one keystroke.
 function invalidate!(s::Session, id::String)
     affected = push!(descendants(s.graph, id), id)
     cachedrop!(s.cache, k -> k[1] in affected)
@@ -146,7 +269,7 @@ function invalidate!(s::Session, id::String)
         s.status[a] = :idle
         delete!(s.errors, a)
     end
-    return s
+    return sort!(collect(affected))
 end
 
 # --- status and results ----------------------------------------------------------------
@@ -242,7 +365,8 @@ function run!(s::Session, targets; context::AbstractString = "analysis", progres
         env = buildenv(s)
         ctx = namedcontext(env, context)
         wanted = totargets(s, targets)
-        run = Run(wanted, Threads.Atomic{Bool}(false), nothing)
+        run = Run(wanted, Threads.Atomic{Bool}(false), nothing;
+            origin = currentorigin())
         s.run = run
         c = Compilation(s.graph, env, ctx, nodehashes(s.graph, env), s.cache,
             Dict{String,NamedTuple}(), Set{String}())
@@ -254,15 +378,24 @@ function run!(s::Session, targets; context::AbstractString = "analysis", progres
                 push!(jobs, Job(id, port, c.hashes[id], p))
                 s.status[id] = :running
                 delete!(s.errors, id)
+                statuschanged!(s, id)
             catch err
                 err isa InterruptException && rethrow()
                 recorderror!(s, err, id)
             end
         end
+        runprogress!(s, run, "started"; targets = wanted, context = String(context))
         run.task = Threads.@spawn executerun(s, run, ctx, jobs, progress)
         run
     end
 end
+
+runprogress!(s::Session, run::Run, state::AbstractString; kwargs...) =
+    emit!(s, :run_progress,
+        Dict{String,Any}("state" => state,
+            (String(k) => k === :targets ?
+                          Any[Any[id, String(port)] for (id, port) in v] : v
+             for (k, v) in pairs(kwargs))...), run.origin)
 
 """
     Loki.cancel!(s::Session) -> Session
@@ -276,11 +409,27 @@ function cancel!(s::Session)
     return s
 end
 
+# The caller's `progress` callback, plus a throttled `run_progress` event. A
+# pipeline that yields a thousand small chunks would otherwise send a thousand
+# messages for one run.
+function progressreporter(s::Session, run::Run, progress)
+    return function (id::String, port::Symbol, rows::Int)
+        progress === nothing || progress(id, port, rows)
+        now = time()
+        last = get(run.lastprogress, (id, port), 0.0)
+        now - last < PROGRESSINTERVAL && return nothing
+        run.lastprogress[(id, port)] = now
+        runprogress!(s, run, "running"; id, port = String(port), rows)
+        return nothing
+    end
+end
+
 function executerun(s::Session, run::Run, ctx::Context, jobs::Vector{Job}, progress)
+    report = progressreporter(s, run, progress)
     for (i, job) in enumerate(jobs)
         run.cancelled[] && break
         frame = try
-            Base.invokelatest(streamjob, run, ctx, job, progress)
+            Base.invokelatest(streamjob, run, ctx, job, report)
         catch err
             err isa InterruptException && rethrow()
             lock(s.lock) do
@@ -297,20 +446,32 @@ function executerun(s::Session, run::Run, ctx::Context, jobs::Vector{Job}, progr
             s.run === run || return
             if frame === nothing
                 s.status[job.id] = :idle
+                statuschanged!(s, job.id)
             else
                 cacheput!(s.cache, (job.id, job.port, job.hash, ctx), frame)
+                emit!(s, :result_ready,
+                    merge(frameevent(frame),
+                        Dict{String,Any}("id" => job.id, "port" => String(job.port),
+                            "context" => contextevent(ctx))), run.origin)
                 # A node is :ok once its last watched port is in, not its first.
-                get(s.status, job.id, :idle) === :running &&
-                    !any(j -> j.id == job.id, view(jobs, (i+1):lastindex(jobs))) &&
-                    (s.status[job.id] = :ok)
+                if get(s.status, job.id, :idle) === :running &&
+                   !any(j -> j.id == job.id, view(jobs, (i+1):lastindex(jobs)))
+                    s.status[job.id] = :ok
+                    statuschanged!(s, job.id)
+                end
             end
         end
     end
     lock(s.lock) do
         s.run === run || return
         for (id, _) in run.targets
-            get(s.status, id, :idle) === :running && (s.status[id] = :idle)
+            if get(s.status, id, :idle) === :running
+                s.status[id] = :idle
+                statuschanged!(s, id)
+            end
         end
+        runprogress!(s, run, run.cancelled[] ? "cancelled" : "done";
+            targets = run.targets)
     end
     return nothing
 end
@@ -349,6 +510,7 @@ function recorderror!(s::Session, err, target::String)
         s.status[failing] = :error
         s.errors[failing] = nerr
     end
+    haskey(s.graph.nodes, failing) && statuschanged!(s, failing)
     if failing != target
         between =
             haskey(s.graph.nodes, failing) ?
@@ -356,6 +518,7 @@ function recorderror!(s::Session, err, target::String)
         for id in (between..., target)
             s.status[id] = :blocked
             s.errors[id] = nerr
+            statuschanged!(s, id)
         end
     end
     return s
@@ -381,6 +544,9 @@ function write!(s::Session, id::AbstractString; context::AbstractString = "analy
         ctx, Base.invokelatest(compileport!, c, nid, first(outputs(nodekind(node.kind))))
     end
     Base.invokelatest(scan, ctx, p)
+    emit!(s, :log,
+        Dict{String,Any}("level" => "info", "id" => nid,
+            "message" => "wrote $(getnode(s.graph, nid).kind) node $nid"))
     return s
 end
 
@@ -408,5 +574,6 @@ function freeze!(s::Session, id::AbstractString; port = nothing,
         frame = Base.invokelatest(load, ctx, p)
     end
     addtable!(s, name, frame)
+    graphchanged!(s, "freeze"; id = nid, name = String(name), table = tableevent(frame))
     return String(name)
 end

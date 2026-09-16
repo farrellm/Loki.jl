@@ -66,7 +66,21 @@ mutable struct Run
     const targets::Vector{Tuple{String,Symbol}}
     const cancelled::Threads.Atomic{Bool}
     task::Union{Nothing,Task}
+    # Captured on the requesting task. A scoped value is inherited by a task
+    # started inside its scope, but the worker outlives the request, so the
+    # origin is carried rather than read again from the worker.
+    const origin::Symbol
+    # The last time each target reported progress, so a fast pipeline does not
+    # flood a socket with one event per chunk.
+    const lastprogress::Dict{Tuple{String,Symbol},Float64}
 end
+
+Run(targets::Vector{Tuple{String,Symbol}}, cancelled::Threads.Atomic{Bool},
+    task::Union{Nothing,Task}; origin::Symbol = :repl) =
+    Run(targets, cancelled, task, origin, Dict{Tuple{String,Symbol},Float64}())
+
+# At most one progress event per target per this many seconds, plus the final one.
+const PROGRESSINTERVAL = 0.1
 
 function Base.wait(run::Run)
     run.task === nothing || wait(run.task)

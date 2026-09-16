@@ -33,6 +33,7 @@ include("fixtures.jl")
     include("nodes.jl")
     include("engine.jl")
     include("diagnostics.jl")
+    include("events.jl")
     include("export.jl")
     include("persist.jl")
 

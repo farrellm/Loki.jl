@@ -101,6 +101,20 @@ Loki.diagnostic
 Loki.diagnostics
 ```
 
+## Events
+
+```@docs
+Loki.Event
+Loki.Subscriber
+Loki.subscribe!
+Loki.unsubscribe!
+Loki.nextevent
+Loki.emit!
+Loki.eventjson
+Loki.withorigin
+Loki.currentorigin
+```
+
 ## Export
 
 ```@docs
@@ -138,8 +152,8 @@ Loki.Node
 Loki.Edge
 Loki.addnode!
 Loki.setparams!
-Loki.setposition!
 Loki.removenode!
+Loki.setposition!
 Loki.connect!
 Loki.disconnect!
 Loki.inedges
