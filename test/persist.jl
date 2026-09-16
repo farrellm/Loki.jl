@@ -187,6 +187,13 @@ end
         s = Loki.Session(; contexts = (analysis = Context(0, 10),))
         Loki.setcontext!(s, "clocktime", Context(Time(0), Time(1)))
         @test_throws ArgumentError Loki.savesession(joinpath(dir, "times.loki.json"), s)
+
+        # Including a time type that writes as JSON but that `opensession` has no
+        # way to name: saving it would leave a file nothing can open.
+        narrow = Loki.Session(; contexts = (analysis = Context(0, 10),))
+        Loki.setcontext!(narrow, "small", Context(Int32(0), Int32(10)))
+        @test_throws ArgumentError Loki.savesession(joinpath(dir, "narrow.loki.json"),
+            narrow)
     end
 
     @testset "stale snapshots" begin

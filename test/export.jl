@@ -54,6 +54,18 @@ comparable(frame::CausalFrame) = comparable(DataFrame(frame))
     @test E(Loki.Code(2.5)) == "2.5"
     @test Loki.Code("f(x)") == Loki.Code("f(x)")
 
+    # Text that parses on its own but would take the argument list around it with
+    # it: a bare tuple would arrive as two arguments, and a trailing comment would
+    # swallow the rest of the line, closing paren and all.
+    @test E(Loki.Code("a, b")) == "(a, b)"
+    @test E(Loki.Code("Minute(5), Hour(1)")) == "(Minute(5), Hour(1))"
+    @test E(Loki.Code("Day(1) # daily")) == "(Day(1) # daily\n)"
+    for text in ("a, b", "Minute(5), Hour(1)", "Day(1) # daily", "x = 1", "5",
+        "r -> r.x > 0", "begin\n 1\n end")
+        call = Meta.parse("f(" * E(Loki.Code(text)) * ", z)")
+        @test call.head === :call && length(call.args) == 3 && call.args[3] === :z
+    end
+
     @test_throws ArgumentError E(Expr(:block, 1))
 end
 
@@ -532,6 +544,28 @@ framebinding(s, id, port) =
         # A snapshot writes only the tables the script reads.
         exportjulia(joinpath(dir, "script.jl"), s; targets = [(logc, :out)])
         @test Set(readdir(dir)) == Set(["script.jl", "prices.parquet"])
+    end
+
+    @testset "a graph that ends in a write" begin
+        # Nothing reads a write node, so with no run and no targets it is the only
+        # endpoint there is: leaving it out would export an empty script.
+        dir = mktempdir()
+        prices = DataFrame(time = 1:10, x = collect(1.0:10.0))
+        s = Loki.Session(; tables = (prices = prices,),
+            contexts = (analysis = Context(0, 11),))
+        src = Loki.addnode!(s, "table", Dict("table" => "prices"))
+        logc = Loki.addnode!(s, "logtransform", Dict("column" => "x"))
+        writer = Loki.addnode!(s, "writecsv", Dict("path" => joinpath(dir, "out.csv")))
+        Loki.connect!(s, (src, :out), (logc, :in))
+        Loki.connect!(s, (logc, :out), (writer, :in))
+
+        text = exportjulia(s)
+        @test occursin("p_$src = readtable(tables.prices)", text)
+        @test occursin("p_$logc = p_$src |> logtransform(:x)", text)
+        @test occursin("p_$writer = p_$logc |> writecsv(", text)
+        # The write is still an endpoint the script shows rather than loads.
+        @test !occursin("frame_", text)
+        @test occursin("# scan(analysis, p_$writer)", text)
     end
 end
 

@@ -116,8 +116,16 @@ function contextsjson(contexts::Dict{String,Context})
     return NamedTuple{Tuple(Symbol.(names))}(Tuple(contextjson(contexts[n]) for n in names))
 end
 
-contextjson(ctx::Context{T}) where {T} =
-    (; timetype = String(nameof(T)), start = timejson(ctx.start), stop = timejson(ctx.stop))
+# The time types `readcontext` knows how to name and rebuild. A context outside
+# them is refused at the save rather than written as a file nothing can open.
+const CONTEXTTIMES = ("Int64", "Float64", "Date", "DateTime")
+
+function contextjson(ctx::Context{T}) where {T}
+    timetype = String(nameof(T))
+    timetype in CONTEXTTIMES ||
+        throw(ArgumentError("cannot save a context whose time is a $T"))
+    return (; timetype, start = timejson(ctx.start), stop = timejson(ctx.stop))
+end
 
 timejson(t::Integer) = t
 timejson(t::AbstractFloat) = t

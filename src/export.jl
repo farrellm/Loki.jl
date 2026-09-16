@@ -48,10 +48,12 @@ printexpr(io::IO, n::Integer) = print(io, n)
 printexpr(io::IO, x::AbstractFloat) = print(io, repr(x))
 
 function printexpr(io::IO, c::Code)
-    parens = needsparens(c)
-    parens && print(io, "(")
-    print(io, c.text)
-    return parens && print(io, ")")
+    needsparens(c) || return print(io, c.text)
+    print(io, "(", c.text)
+    # Text ending in a comment would swallow the closing paren with it, so the
+    # paren goes on a line of its own where it has to.
+    standsalone("(" * c.text * ")") || print(io, "\n")
+    return print(io, ")")
 end
 
 # A symbol as a literal: `:x`, or `Symbol("#x_difflag")` for the private names
@@ -159,7 +161,22 @@ function needsparens(c::Code)
         return true
     end
     expr isa Expr || return false
-    return !(expr.head in BAREHEADS)
+    expr.head in BAREHEADS || return true
+    # Parsing alone is not enough: the head says what the text *is*, not what it
+    # does to the argument list around it. A bare tuple (`a, b`) would arrive as
+    # two arguments, and a trailing comment would swallow the rest of the line, so
+    # the text has to survive being one argument among others.
+    return !standsalone(c.text)
+end
+
+function standsalone(text::AbstractString)
+    call = try
+        Meta.parse("_f(" * text * ", _z)")
+    catch
+        return false
+    end
+    return call isa Expr && call.head === :call && length(call.args) == 3 &&
+           call.args[3] === :_z
 end
 
 # --- exporting a session ------------------------------------------------------
@@ -246,8 +263,10 @@ function scripttext(s::Session, tablemode::Symbol, targets, ctxname::String, dir
     return join([join(sec, "\n") for sec in sections if !isempty(sec)], "\n\n") * "\n"
 end
 
-# The ports a script ends by loading: the last run's, or every output nothing
-# reads. A write node's output is never one of them.
+# The ports a script ends on: the last run's, or every output nothing reads. A
+# write node's port is one of them — leaving it out would drop the whole pipeline
+# feeding it, since a write reads its input rather than being read — but
+# `loadlines` shows it as the commented `scan` instead of loading it.
 function defaulttargets(s::Session)
     run = s.run
     if run !== nothing && !isempty(run.targets) &&
@@ -258,7 +277,6 @@ function defaulttargets(s::Session)
     wanted = Tuple{String,Symbol}[]
     for id in topoorder(g)
         kind = nodekind(g.nodes[id].kind)
-        iswrite(kind) && continue
         for port in outputs(kind)
             any(e -> e.from == (id, port), g.edges) || push!(wanted, (id, port))
         end
@@ -430,7 +448,8 @@ timeexpr(t) =
     throw(ArgumentError("cannot export a context whose time is a $(typeof(t))"))
 
 # The tables the exported nodes name, in the order they name them: a table only a
-# left-out node reads is neither declared nor snapshotted.
+# left-out node reads is neither declared nor snapshotted. A name the script
+# cannot spell is refused here, before anything is written to disk.
 function tablenames(g::Graph, keep)
     names = String[]
     for id in topoorder(g)
@@ -444,16 +463,16 @@ function tablenames(g::Graph, keep)
             name isa AbstractString && !(name in names) && push!(names, String(name))
         end
     end
-    return names
-end
-
-function tablelines(names, tablemode::Symbol, snapshots)
-    isempty(names) && return String[]
     for name in names
         Base.isidentifier(name) ||
             throw(ArgumentError("table name $(repr(name)) is not a Julia identifier, \
                 so it cannot be exported"))
     end
+    return names
+end
+
+function tablelines(names, tablemode::Symbol, snapshots)
+    isempty(names) && return String[]
     tablemode === :snapshot || return [
         "# `tables`: supplied by the caller, with a field per table — " *
         join(names, ", "),
