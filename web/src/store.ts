@@ -35,6 +35,7 @@ export function useSession() {
   const [watched, setWatched] = useState<Watched | null>(null)
 
   const pending = useRef(false)
+  const again = useRef(false)
 
   const note = useCallback((text: string, tone: Notice['tone'] = 'info') => {
     const notice = { id: ++noticeId, text, tone }
@@ -45,13 +46,21 @@ export function useSession() {
     )
   }, [])
 
-  // One refetch at a time, and never two in flight: the socket can ask for
-  // several in a burst while a run is settling.
+  // One refetch at a time, but a request made while one is in flight is
+  // coalesced rather than dropped: the socket asks for several in a burst while
+  // a run settles, and discarding the last one would leave the canvas showing a
+  // graph that no longer exists.
   const resync = useCallback(async () => {
-    if (pending.current) return
+    if (pending.current) {
+      again.current = true
+      return
+    }
     pending.current = true
     try {
-      setGraph(await api.graph())
+      do {
+        again.current = false
+        setGraph(await api.graph())
+      } while (again.current)
     } catch (error) {
       note(error instanceof Error ? error.message : String(error), 'error')
     } finally {

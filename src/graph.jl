@@ -73,7 +73,10 @@ function addnode!(g::Graph, kind::AbstractString, params::AbstractDict = Dict{St
     id::Union{Nothing,AbstractString} = nothing, position = (0.0, 0.0))
     k = nodekind(kind)
     stored = stringkeys(params)
-    validateparams(k, stored)
+    # An edit checks what it can: a parameter the kind does not have, or one of
+    # the wrong type, is refused here. A required one that is not filled in yet
+    # is not — see `Loki.checkparams`.
+    checkparams(k, stored)
     if id !== nothing && (haskey(g.nodes, id) || any(e -> e.id == id, g.edges))
         throw(ArgumentError("id $(repr(id)) is already in use"))
     end
@@ -91,7 +94,7 @@ Replace a node's parameters, checked against its kind's.
 function setparams!(g::Graph, id::AbstractString, params::AbstractDict)
     node = getnode(g, id)
     stored = stringkeys(params)
-    validateparams(nodekind(node.kind), stored)
+    checkparams(nodekind(node.kind), stored)
     node.params = stored
     return node
 end

@@ -60,12 +60,13 @@ export function Inspector({ store }: { store: SessionStore }) {
     ...Object.keys(properties).filter((name) => !order.includes(name)),
   ]
 
-  const setParam = (name: string, value: unknown) => {
-    const params = { ...node.params }
-    if (value === null || value === undefined) delete params[name]
-    else params[name] = value
-    void act('Could not change the parameter', () => api.updateParams(node.id, params))
-  }
+  // Only the parameter that changed. The server merges it, so two edits in quick
+  // succession cannot undo each other by each sending a copy of the whole object
+  // taken before the other landed.
+  const setParam = (name: string, value: unknown) =>
+    void act('Could not change the parameter', () =>
+      api.updateParams(node.id, { [name]: value ?? null }),
+    )
 
   return (
     <section className="inspector" aria-label="Inspector" data-testid="inspector">

@@ -123,9 +123,28 @@ function emit end
     Loki.validateparams(kind::NodeKind, params::AbstractDict) -> Dict{String,Any}
 
 Check `params` against the kind's parameters, raising an `ArgumentError` for an
-unknown, missing or mistyped one, and return them with defaults filled in.
+unknown, missing or mistyped one, and return them with defaults filled in. This
+is what [`Loki.build`](@ref) and [`Loki.emit`](@ref) use, so a node is complete
+by the time it is built.
+
+[`Loki.checkparams`](@ref) is the weaker check a graph edit makes.
 """
 validateparams(::NodeKind, params::AbstractDict) = stringkeys(params)
+
+"""
+    Loki.checkparams(kind::NodeKind, params::AbstractDict) -> Dict{String,Any}
+
+Check `params` as far as an *edit* can: an unknown or mistyped parameter is an
+`ArgumentError`, but a missing required one is not.
+
+A node is placed before it is filled in — from the palette, a kind arrives with
+no parameters at all — so requiring them at the edit would make the canvas
+impossible to use. An incomplete node is not invalid, it is unfinished: it sits
+`:idle` until something asks for it, and then fails on itself with the parameter
+named, which is where the user is looking anyway. It is the same rule the
+exporter follows for a half-wired node.
+"""
+checkparams(k::NodeKind, params::AbstractDict) = validateparams(k, params)
 
 stringkeys(params::AbstractDict) = Dict{String,Any}(String(k) => v for (k, v) in params)
 
@@ -222,7 +241,7 @@ Whether the kind implements [`Loki.emit`](@ref), and so can be exported.
 canemit(k::OpKind) = k.emitter !== nothing
 canemit(k::NodeKind) = hasmethod(emit, Tuple{typeof(k),Dict{String,Any},Dict{Symbol,Any}})
 
-function validateparams(k::OpKind, params::AbstractDict)
+function checkparams(k::OpKind, params::AbstractDict)
     out = stringkeys(params)
     for (name, value) in out
         i = findfirst(p -> p.name == name, k.params)
@@ -236,6 +255,11 @@ function validateparams(k::OpKind, params::AbstractDict)
                 $(repr(value))",
                 ))
     end
+    return out
+end
+
+function validateparams(k::OpKind, params::AbstractDict)
+    out = checkparams(k, params)
     for spec in k.params
         get(out, spec.name, nothing) === nothing || continue
         spec.required &&

@@ -140,11 +140,13 @@ end
     end
 
     @testset "the bundle, built and unbuilt" begin
-        withserver() do ctx
-            # Nothing built: the page says how, and the API still works.
+        # Explicitly nowhere, rather than trusting that nobody has run the build:
+        # the point is what happens when the directory is not there.
+        withserver(; assets = joinpath(mktempdir(), "never-built")) do ctx
             page = ask(ctx, "GET", "/"; token = nothing)
             @test page.status == 200
             @test occursin("npm run build", String(page.body))
+            # The API, and everything that matters to a REPL or an agent, is up.
             @test ask(ctx, "GET", "/api/graph").status == 200
         end
 
@@ -199,6 +201,20 @@ end
             # Parameters and position are separate edits.
             @test ask(ctx, "PATCH", "/api/nodes/$n2";
                 body = Dict("params" => Dict("column" => "x", "span" => 9))).status == 200
+            # PATCH merges, so one field at a time is safe: sending the whole
+            # object would let two quick edits undo each other.
+            @test ask(ctx, "PATCH", "/api/nodes/$n2";
+                body = Dict("params" => Dict("name" => "smooth"))).status == 200
+            merged = only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
+                          if n.id == n2)
+            @test merged.params.column == "x"
+            @test merged.params.span == 9
+            @test merged.params.name == "smooth"
+            # `null` removes one.
+            @test ask(ctx, "PATCH", "/api/nodes/$n2";
+                body = Dict("params" => Dict("name" => nothing))).status == 200
+            @test !haskey(only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
+                               if n.id == n2).params, :name)
             @test ask(ctx, "PATCH", "/api/nodes/$n2";
                 body = Dict("position" => [7, 8])).status == 200
             @test ask(ctx, "PATCH", "/api/nodes/$n2"; body = Dict()).status == 400

@@ -50,6 +50,7 @@ Loki.inputs
 Loki.outputs
 Loki.paramschema
 Loki.validateparams
+Loki.checkparams
 Loki.build
 Loki.isacausal
 Loki.iswrite

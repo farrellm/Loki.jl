@@ -47,6 +47,45 @@ jobs:
           files: lcov.info
           use_oidc: true
           fail_ci_if_error: false
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # The bundle is not in version control; the server serves it from here.
+      - run: npm run build
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npx playwright install --with-deps chromium webkit
+        working-directory: web
+      # Desktop Chromium, and WebKit on an iPhone profile where the specs may
+      # only tap: a hover-only or drag-only affordance fails here rather than on
+      # someone's phone.
+      - run: npm run test:e2e
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+
   format:
     name: Format check
     runs-on: ubuntu-latest

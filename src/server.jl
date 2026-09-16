@@ -389,7 +389,13 @@ function buildrouter(srv::Server)
         body = readjson(req)
         # Position and parameters are separate edits: dragging a node must not
         # invalidate it, and neither must be silently skipped.
-        haskey(body, "params") && updatenode!(s, id, Dict{String,Any}(body["params"]))
+        # PATCH means what it says: the parameters given are merged into the
+        # node's, and a `null` removes one. Sending the whole object instead
+        # would make two quick edits race — the second would be built from a
+        # copy taken before the first landed, and would silently undo it.
+        haskey(body, "params") && updatenode!(s, id,
+            mergeparams(lock(() -> getnode(s.graph, id).params, s.lock),
+                Dict{String,Any}(body["params"])))
         haskey(body, "position") &&
             setposition!(s, id, Tuple(Float64.(body["position"])))
         (haskey(body, "params") || haskey(body, "position")) ||
@@ -522,6 +528,14 @@ function buildrouter(srv::Server)
 end
 
 contextname(req::HTTP.Request) = String(get(query(req), "context", "analysis"))
+
+function mergeparams(current::AbstractDict, given::AbstractDict)
+    merged = Dict{String,Any}(current)
+    for (name, value) in given
+        value === nothing ? delete!(merged, name) : (merged[name] = value)
+    end
+    return merged
+end
 
 # The cached frame a results or diagnostics route is about, and the node it came
 # from. A node that exists but has not been evaluated is a 409 rather than a 404:

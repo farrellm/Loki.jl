@@ -38,6 +38,13 @@ export default function App() {
 
   useEffect(() => remember('loki.compact', String(compact)), [compact])
 
+  // Arming a kind from the palette gets the sheet out of the way: it covers the
+  // lower half of the canvas, and being unable to reach the place you meant to
+  // tap is a dead end rather than a nuisance.
+  useEffect(() => {
+    if (pendingKind !== null && !wide) setSheetHeight('peek')
+  }, [pendingKind, wide])
+
   // Opening a port's panels is what a "watched" node means to the engine, so
   // the sheet follows it on a phone.
   useEffect(() => {

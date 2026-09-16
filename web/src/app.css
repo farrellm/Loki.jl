@@ -216,6 +216,18 @@
   height: 26px;
 }
 
+/* React Flow puts its zoom and fit controls bottom left, which is exactly where
+   the sheet is. They move to the top, which no sheet height covers. */
+.app--narrow .react-flow__controls {
+  top: 8px;
+  bottom: auto;
+}
+
+.app--narrow .react-flow__controls button {
+  width: var(--tap);
+  height: var(--tap);
+}
+
 .app--narrow .bar__toggles,
 .app--narrow .bar__window {
   display: none;

@@ -1,5 +1,39 @@
+import { useEffect, useState } from 'react'
 import { CodeField } from './CodeField'
 import type { ParamSchema } from '../types'
+
+// A parameter edit is a graph edit: it invalidates the node and everything
+// downstream. So a text field commits when you leave it or press Enter, not on
+// every keystroke — otherwise typing `close` would throw away four results on
+// the way to the fifth.
+function CommittedInput({
+  id,
+  value,
+  onCommit,
+  ...rest
+}: {
+  id: string
+  value: string
+  onCommit: (text: string) => void
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'>) {
+  const [draft, setDraft] = useState(value)
+  // Take the server's value again whenever it changes under us — an agent may
+  // have edited the same node.
+  useEffect(() => setDraft(value), [value])
+  return (
+    <input
+      {...rest}
+      id={id}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => draft !== value && onCommit(draft)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+        if (e.key === 'Escape') setDraft(value)
+      }}
+    />
+  )
+}
 
 // One field per parameter, generated from the kind's JSON Schema. Loki's own
 // vocabulary rides in `x-loki`, which is what turns a string into a column
@@ -97,12 +131,12 @@ function Control({
     // more useful than an empty dropdown.
     if (options.length === 0) {
       return (
-        <input
+        <CommittedInput
           id={id}
           className="mono"
           value={blank ? '' : String(value)}
           placeholder={`a ${loki} name`}
-          onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
+          onCommit={(text) => onChange(text === '' ? null : text)}
         />
       )
     }
@@ -126,13 +160,13 @@ function Control({
   if (loki === 'columns') {
     const current = Array.isArray(value) ? value.join(', ') : blank ? '' : String(value)
     return (
-      <input
+      <CommittedInput
         id={id}
         className="mono"
         value={current}
         placeholder="one column, or several separated by commas"
-        onChange={(e) => {
-          const parts = e.target.value
+        onCommit={(text) => {
+          const parts = text
             .split(',')
             .map((p) => p.trim())
             .filter((p) => p !== '')
@@ -181,18 +215,18 @@ function Control({
 
   if (schema.type === 'integer' || schema.type === 'number') {
     return (
-      <input
+      <CommittedInput
         id={id}
         type="number"
         className="num"
         step={schema.type === 'integer' ? 1 : 'any'}
         value={blank ? '' : String(value)}
-        onChange={(e) => {
-          if (e.target.value === '') return onChange(null)
+        onCommit={(text) => {
+          if (text === '') return onChange(null)
           const parsed =
             schema.type === 'integer'
-              ? Number.parseInt(e.target.value, 10)
-              : Number.parseFloat(e.target.value)
+              ? Number.parseInt(text, 10)
+              : Number.parseFloat(text)
           onChange(Number.isNaN(parsed) ? null : parsed)
         }}
       />
@@ -203,13 +237,13 @@ function Control({
     // `integers`: the ARMA orders, and the rolling windows.
     const current = Array.isArray(value) ? value.join(', ') : ''
     return (
-      <input
+      <CommittedInput
         id={id}
         className="mono"
         value={current}
         placeholder={name === 'order' ? 'p, d, q' : 'numbers separated by commas'}
-        onChange={(e) => {
-          const parts = e.target.value
+        onCommit={(text) => {
+          const parts = text
             .split(',')
             .map((p) => Number.parseInt(p.trim(), 10))
             .filter((p) => !Number.isNaN(p))
@@ -220,11 +254,11 @@ function Control({
   }
 
   return (
-    <input
+    <CommittedInput
       id={id}
       className="mono"
       value={blank ? '' : String(value)}
-      onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
+      onCommit={(text) => onChange(text === '' ? null : text)}
     />
   )
 }

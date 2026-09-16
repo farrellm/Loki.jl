@@ -94,8 +94,18 @@ end
     @test_throws ArgumentError Loki.addnode!(g, "no_such_kind")
     @test_throws ArgumentError Loki.addnode!(g, "test_source"; id = s)
     @test_throws ArgumentError Loki.addnode!(g, "test_source", Dict("rows" => "x"))
-    @test_throws ArgumentError Loki.addnode!(g, "test_required")
-    @test length(g.nodes) == 1
+    # A node is placed before it is filled in, so a missing required parameter is
+    # not an edit error — it is an unfinished node, and it says so when built.
+    incomplete = Loki.addnode!(g, "test_required")
+    @test Loki.getnode(g, incomplete).params == Dict{String,Any}()
+    @test_throws ArgumentError Loki.validateparams(Loki.nodekind("test_required"),
+        Dict{String,Any}())
+    @test Loki.checkparams(Loki.nodekind("test_required"), Dict{String,Any}()) ==
+          Dict{String,Any}()
+    # A parameter the kind does not have is still refused where it is made.
+    @test_throws ArgumentError Loki.addnode!(g, "test_required", Dict("nope" => 1))
+    @test_throws ArgumentError Loki.addnode!(g, "test_required", Dict("column" => 7))
+    @test length(g.nodes) == 2
 
     m = Loki.addnode!(g, "test_map"; id = "map")
     e1 = Loki.connect!(g, (s, :out), (m, "in"))
