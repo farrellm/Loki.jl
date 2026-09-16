@@ -280,4 +280,37 @@ end
         @test isfile(path)
         @test_throws ArgumentError Loki.write!(s, after)
     end
+
+    # A run that finished a target after the session moved on must leave the
+    # session alone, cache included: `executerun` is replayed here with a `Run`
+    # the session no longer holds, which is the race a real superseded run loses.
+    @testset "a superseded run caches nothing" begin
+        s, _ = enginesession()
+        src = Loki.addnode!(s, "table", Dict("table" => "df"))
+        finished = Loki.run!(s, src)
+        wait(finished)
+        @test Loki.result(s, src) !== nothing
+
+        ctx = s.contexts["analysis"]
+        env = Loki.buildenv(s)
+        hash = Loki.nodehashes(s.graph, env)[src]
+        job() = Loki.Job(src, :out, hash,
+            Loki.compileport!(
+                Loki.Compilation(s.graph, env, ctx, Loki.nodehashes(s.graph, env),
+                    s.cache, Dict{String,NamedTuple}(), Set{String}()), src, :out))
+
+        Loki.cachedrop!(s.cache, _ -> true)
+        @test Loki.result(s, src) === nothing
+        s.run = Loki.Run([(src, :out)], Threads.Atomic{Bool}(false), nothing)
+        s.status[src] = :running
+        Loki.executerun(s, finished, ctx, [job()], nothing)
+        @test Loki.result(s, src) === nothing
+        @test Loki.status(s, src) === :running   # the status is the live run's too
+
+        # The same replay by the run the session does hold caches as it should,
+        # so the test above cannot pass by doing nothing at all.
+        Loki.executerun(s, s.run, ctx, [job()], nothing)
+        @test Loki.result(s, src) !== nothing
+        @test Loki.status(s, src) === :ok
+    end
 end

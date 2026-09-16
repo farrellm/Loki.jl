@@ -289,12 +289,18 @@ function executerun(s::Session, run::Run, ctx::Context, jobs::Vector{Job}, progr
             continue
         end
         lock(s.lock) do
+            # A superseded run owns nothing of the session any more — not its
+            # statuses and not its cache. Its frame is keyed by an upstream hash
+            # that is still correct, but the session it was computed for may since
+            # have been reset or reopened, and refilling that cache would resurrect
+            # a result for a graph that no longer exists.
+            s.run === run || return
             if frame === nothing
-                s.run === run && (s.status[job.id] = :idle)
+                s.status[job.id] = :idle
             else
                 cacheput!(s.cache, (job.id, job.port, job.hash, ctx), frame)
                 # A node is :ok once its last watched port is in, not its first.
-                s.run === run && get(s.status, job.id, :idle) === :running &&
+                get(s.status, job.id, :idle) === :running &&
                     !any(j -> j.id == job.id, view(jobs, (i+1):lastindex(jobs))) &&
                     (s.status[job.id] = :ok)
             end
