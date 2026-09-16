@@ -155,7 +155,7 @@ end
         withserver(; assets = dir) do ctx
             index = ask(ctx, "GET", "/"; token = nothing)
             @test occursin("<title>Loki</title>", String(index.body))
-            @test HTTP.header(index, "Cache-Control") == "no-cache"
+            @test HTTP.header(index, "Cache-Control") == "no-store"
 
             js = ask(ctx, "GET", "/assets/main-abc123.js"; token = nothing)
             @test js.status == 200

@@ -1,0 +1,196 @@
+/* The plotting table.
+ *
+ * Six tokens carry the whole interface. They are functional, not decorative:
+ * `signal` is "this worked", `alarm` is "this failed", `ahead` is "this looks
+ * forward in time". Nothing here is a colour for its own sake, which is why
+ * there is no gradient and no accent that means nothing.
+ *
+ * Acausality is deliberately NOT carried by colour alone. It is a 45° hatch —
+ * the convention a fan chart uses for the part you do not know yet — so it
+ * survives greyscale, colour blindness, and a phone screen in sunlight.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --paper: #edf0ee;
+  --panel: #fafbfa;
+  --ink: #17201f;
+  --rule: #c5cdc9;
+  --signal: #1d6b57;
+  --alarm: #a93a2e;
+  --ahead: #6e5aa3;
+
+  --ink-quiet: color-mix(in srgb, var(--ink) 62%, var(--paper));
+  --ink-faint: color-mix(in srgb, var(--ink) 40%, var(--paper));
+  --hover: color-mix(in srgb, var(--ink) 6%, transparent);
+  --selected: color-mix(in srgb, var(--signal) 14%, transparent);
+  --hatch: color-mix(in srgb, var(--ahead) 22%, transparent);
+  --shadow: 0 -2px 16px color-mix(in srgb, var(--ink) 18%, transparent);
+
+  --ui: 'Atkinson Hyperlegible', ui-sans-serif, system-ui, sans-serif;
+  --mono: 'Spline Sans Mono Variable', ui-monospace, 'SF Mono', monospace;
+
+  /* 1.25 from a 15px base. 16px is the floor for anything focusable: below it
+     iOS Safari zooms the page on focus and the layout jumps. */
+  --t-xs: 12px;
+  --t-s: 13px;
+  --t-m: 15px;
+  --t-l: 19px;
+  --t-xl: 23px;
+
+  --gap: 12px;
+  --rail: 3px;
+  --tap: 44px;
+  /* Controls are dense under a mouse and 44pt under a finger. The font floor is
+     iOS Safari's: below 16px it zooms the page on focus and the layout jumps. */
+  --control: 32px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+:root[data-theme='dark'],
+:root:not([data-theme='light']) {
+  @media (prefers-color-scheme: dark) {
+    --paper: #161a19;
+    --panel: #1e2422;
+    --ink: #dce3df;
+    --rule: #39423f;
+    --signal: #4fb899;
+    --alarm: #e0705f;
+    --ahead: #a290d6;
+  }
+}
+
+:root[data-theme='dark'] {
+  --paper: #161a19;
+  --panel: #1e2422;
+  --ink: #dce3df;
+  --rule: #39423f;
+  --signal: #4fb899;
+  --alarm: #e0705f;
+  --ahead: #a290d6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: var(--t-m) / 1.5 var(--ui);
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--t-m);
+}
+
+h3 {
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+}
+
+/* Keyboard focus is always visible, and never only a colour change. */
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  font-size: var(--t-s);
+  color: inherit;
+}
+
+button {
+  min-height: var(--control);
+  padding: 0 14px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+button:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+button.primary {
+  border-color: var(--signal);
+  background: var(--signal);
+  color: var(--panel);
+  font-weight: 600;
+}
+
+button.quiet {
+  border-color: transparent;
+  background: none;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  min-height: var(--control);
+  padding: 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+}
+
+input[type='checkbox'] {
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  accent-color: var(--signal);
+}
+
+.mono,
+code,
+pre {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

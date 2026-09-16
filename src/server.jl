@@ -599,8 +599,16 @@ function nodekindjson(name::AbstractString)
         "acausal" => Any[String(p) for p in outputs(k)
                          if isacausal(k, Dict{String,Any}(), p)],
         "write" => iswrite(k), "canemit" => canemit(k),
-        "paramschema" => paramschema(k))
+        "paramschema" => paramschema(k),
+        # A JSON object has no order, and a form in declaration order reads very
+        # differently from one in hash order: `family` and `column` first, the
+        # options after them.
+        "paramorder" => paramorder(k))
 end
+
+paramorder(k::OpKind) = Any[p.name for p in k.params]
+paramorder(k::NodeKind) = Any[String(n)
+                              for n in keys(get(paramschema(k), "properties", Dict()))]
 
 categoryof(k::OpKind) = k.category
 categoryof(::NodeKind) = "other"
@@ -692,8 +700,12 @@ function staticresponse(srv::Server, path::AbstractString)
         full = joinpath(srv.root, "index.html")
         isfile(full) || return jsonerror(404, "not found")
     end
+    # Vite hashes the names under /assets, so those never change and are cached
+    # forever. `index.html` points at this build's hashes and must not be: with
+    # no validator to revalidate against, `no-cache` still lets a browser reuse
+    # it, and a stale index means a stale app against a fresh server.
     cache = startswith(path, "/assets/") ? "public, max-age=31536000, immutable" :
-            "no-cache"
+            "no-store"
     return HTTP.Response(200,
         ["Content-Type" => contenttype(full), "Cache-Control" => cache], read(full))
 end
