@@ -11,8 +11,9 @@ residual tests, and export the graph as a plain Julia script. The same session
 can be driven from a browser or by an agent over MCP.
 
 Loki is under construction; [DESIGN.md](DESIGN.md) describes the design and its
-milestones. The time-series operators, in-sample fits, the graph and the engine
-are in place and usable from the REPL.
+milestones. The time-series operators, in-sample fits, the graph, the engine,
+the diagnostics and the browser app are in place; driving the same session from
+an agent over MCP is next.
 
 ## Operators
 
@@ -54,6 +55,44 @@ Loki.status(s, fit)                      # :ok
 Loki.result(s, fit; port = :insample)    # the frame, with close_log_diff_residual
 Loki.isacausal(s, fit; port = :insample) # true: residuals over the fit window
 ```
+
+## In the browser
+
+`Loki.serve` puts the same session behind a local web app: a canvas of the
+graph, a form for each node's parameters, and the diagnostics — ACF, PACF,
+stationarity and Ljung–Box tests, and the residual panel that closes the
+Box–Jenkins loop.
+
+```julia
+Loki.serve(s)   # prints a URL carrying a per-session token
+```
+
+It binds to `127.0.0.1` in every mode, and every API route needs the token or
+the cookie it is exchanged for — a node's parameters can be Julia the session
+evaluates, so the containment is the point. Reaching it from a phone goes
+through `tailscale serve` and only through it:
+
+```sh
+tailscale serve --bg 8712
+```
+
+```julia
+Loki.serve(s; port = 8712, public_url = "https://workstation.example-tailnet.ts.net")
+```
+
+The app is one responsive UI rather than a desktop one and a phone one: below a
+breakpoint the same panels become a bottom sheet over the canvas, and nothing is
+hover-only or drag-only. Each node on the canvas shows the line of Julia it
+exports, so reading the graph is reading the script it becomes — and a node that
+looks ahead in time is hatched, along with everything downstream of it.
+
+The bundle is built rather than committed:
+
+```sh
+cd web && npm ci && npm run build
+```
+
+A server without one still runs; it serves a page saying how to build it.
 
 ## Export and save
 

@@ -6,9 +6,10 @@ of the graph as a plain Julia script.
 
 **DESIGN.md is the source of truth for the design and must be kept in sync
 with any API or semantics change.** Its "Milestones" section is the roadmap;
-Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine) and 2
-(`emit`, `exportjulia`, table snapshots, `.loki.json`) are done, Milestone 3
-(the server and web app, with diagnostics) is next.
+Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine), 2
+(`emit`, `exportjulia`, table snapshots, `.loki.json`) and 3 (diagnostics,
+events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
+(MCP mode) is next.
 
 ## Commands
 
@@ -39,6 +40,13 @@ Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine) and 2
 - CI tests Julia 1.12 (minimum supported) and pre-release — don't use
   post-1.12 language or stdlib features
 - The default branch is `master`, not `main` — target PRs there
+- Web app: `cd web && npm ci`, then `npm run build` (writes `assets/web`, which
+  is gitignored — build it or the server serves a "not built" page), `npm test`
+  (vitest) and `npm run test:e2e` (Playwright: desktop Chromium and WebKit on an
+  iPhone profile, against a live `Loki.serve()` that `playwright.config.ts`
+  starts). The `web` CI job runs all three. WebKit needs system libraries that
+  `npx playwright install --with-deps` installs with root; without them, run the
+  desktop project only
 
 ## CausalFrames dependency
 
@@ -57,6 +65,12 @@ same reason StateSpaceModels is `import StateSpaceModels as SSM`: its
 
 ## Invariants and conventions
 
+- Diagnostics read a frame through `Tables.schema`, `nrow`, `Base.names`,
+  `context` and `Tables.partitions` only. `frame.chunks` is private to
+  CausalFrames; every diagnostic is tested against a multi-chunk frame and a
+  single-chunk one holding the same rows, which is what keeps it that way.
+- Anything a diagnostic reports is sanitized where it is built: `JSON3.write`
+  refuses `NaN` and `Inf`, and degenerate input produces both.
 - Depend only on CausalFrames' **exported** API. The known exceptions are
   recorded in DESIGN.md's "Relationship to CausalFrames": reading
   `CausalPipeline`'s `run` field (`tagged`, `cachedsource`, `fitonce`,
