@@ -36,25 +36,17 @@ Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine) and 2
   `[compat]` line too — remove the duplicate. Test-only deps go in `[extras]`
   and `[targets]` instead. Only add a dependency in the commit that first uses
   it — Aqua's stale-deps check fails on an unused one
-- CI tests Julia 1.10 (minimum supported), 1.12, and pre-release — don't use
-  post-1.10 language or stdlib features
-- Workarounds to revert once Julia 1.10 support is dropped:
-  - `ARMAFilter`'s step (`kalmanstep!`/`forecast!` in
-    `src/timeseries/summarizers.jl`) calls `BLAS.gemv!`/`gemm!` because 1.10's
-    `mul!` dispatches at run time per row (JET caught it) — go back to `mul!`
-  - Aqua's persistent-tasks check is skipped on 1.10 (`test/runtests.jl`), and
-    the 1.10 CI job adds CausalFrames by URL, because 1.10 ignores `[sources]`
+- CI tests Julia 1.12 (minimum supported) and pre-release — don't use
+  post-1.12 language or stdlib features
 - The default branch is `master`, not `main` — target PRs there
 
 ## CausalFrames dependency
 
 CausalFrames (`../CausalFrames`, github.com/farrellm/CausalFrames.jl) is not
-registered. `Project.toml` names it in `[sources]` by URL, which Julia 1.11+
-reads; Julia 1.10 ignores `[sources]`, so the 1.10 CI job runs
-`Pkg.add(url=…)` before building. Aqua's persistent-tasks check resolves Loki
-in a fresh environment that step can't reach, so it is skipped on 1.10. To work against a local CausalFrames
-checkout, `Pkg.develop(path="../CausalFrames")` (this only touches the
-gitignored Manifest).
+registered. `Project.toml` names it in `[sources]` by URL, which every
+supported Julia reads. To work against a local CausalFrames checkout,
+`Pkg.develop(path="../CausalFrames")` (this only touches the gitignored
+Manifest).
 
 Loki takes CausalFrames' optional dependencies — DuckDB, Parquet2,
 MLJModelInterface — as hard dependencies, so loading Loki loads all three

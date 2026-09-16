@@ -976,14 +976,17 @@ MLJModelInterface runs in its light mode without MLJBase, so an MLJ node needs
 when they are absent.
 
 CausalFrames is not registered. Until it is, `Project.toml` names it in
-`[sources]` by URL, which Julia 1.11 and later read; Julia 1.10 does not, so
-its CI job adds CausalFrames by URL before building. The Manifest stays out of
+`[sources]` by URL, which every supported Julia reads. The Manifest stays out of
 version control.
 
-Package infrastructure follows CausalFrames: Julia 1.10 as the minimum
-(StateSpaceModels and ModelContextProtocol both support it), `test/` with Aqua
-and targeted JET checks, a Documenter site, JuliaFormatter, and this file as the
-source of truth for the design.
+Package infrastructure follows CausalFrames, with **Julia 1.12 as the minimum**.
+Loki is an application, not a library other packages depend on, so it has no
+reason to carry the accommodations an older floor costs: `[sources]` is read
+without a workaround, `mul!` is statically dispatched in the ARMA filter's inner
+loop, and `Base.ScopedValues` carries a command's origin into the run worker.
+The rest follows CausalFrames: `test/` with Aqua and targeted JET checks, a
+Documenter site, JuliaFormatter, and this file as the source of truth for the
+design.
 
 ## Testing
 
