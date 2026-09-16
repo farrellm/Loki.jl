@@ -129,6 +129,31 @@ end
         end
         @test err isa ArgumentError && occursin("newer Loki", err.msg)
 
+        # A header alone is not a session: a file missing a section it must have,
+        # or holding one of the wrong shape, is reported as such rather than as a
+        # KeyError from the JSON.
+        truncated = joinpath(dir, "truncated.loki.json")
+        write(truncated, """{"format": "loki", "version": 1, "contexts": {}}""")
+        err = try
+            Loki.opensession(truncated)
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("it has no nodes", err.msg)
+
+        misshapen = joinpath(dir, "misshapen.loki.json")
+        write(
+            misshapen,
+            """{"format": "loki", "version": 1, "contexts": {}, "nodes": 3,
+ "edges": []}""",
+        )
+        err = try
+            Loki.opensession(misshapen)
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("it has no nodes", err.msg)
+
         # A node the kinds cannot rebuild fails on that node.
         unknown = joinpath(dir, "unknown.loki.json")
         write(
@@ -162,6 +187,30 @@ end
         s = Loki.Session(; contexts = (analysis = Context(0, 10),))
         Loki.setcontext!(s, "clocktime", Context(Time(0), Time(1)))
         @test_throws ArgumentError Loki.savesession(joinpath(dir, "times.loki.json"), s)
+    end
+
+    @testset "stale snapshots" begin
+        dir = mktempdir()
+        path = joinpath(dir, "analysis.loki.json")
+        tables = joinpath(dir, "analysis.tables")
+        s, _ = persistsession()
+        Loki.savesession(path, s)
+        @test Set(readdir(tables)) == Set(["prices.parquet", "dim.parquet"])
+
+        # A table dropped since the last save takes its snapshot with it, and a
+        # file Loki did not write is left alone.
+        keepme = joinpath(tables, "notes.txt")
+        write(keepme, "mine")
+        delete!(s.tables, "dim")
+        Loki.savesession(path, s)
+        @test Set(readdir(tables)) == Set(["prices.parquet", "notes.txt"])
+        @test isfile(keepme)
+        @test Set(keys(Loki.opensession(path).tables)) == Set(["prices"])
+
+        # Including when nothing is left to snapshot.
+        delete!(s.tables, "prices")
+        Loki.savesession(path, s)
+        @test Set(readdir(tables)) == Set(["notes.txt"])
     end
 
     @testset "an empty session" begin

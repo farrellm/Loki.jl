@@ -182,16 +182,23 @@ and a loaded frame's is `frame_<id>[_<port>]` — so including the script and
 comparing those frames against the session's is what "the export is correct"
 means.
 
+The script holds what the targets need, as a run compiles them, and not the rest
+of the graph: a node the targets do not reach is left out, and cannot fail the
+export by being half wired. Exporting every sink — the default with no run — does
+reach such a node, and says so. A session file keeps the whole graph either way
+(see [`Loki.savesession`](@ref)).
+
 `tables` says where the session's in-memory tables come from:
 
 - `:snapshot` writes each one beside the script (see [`Loki.savetable`](@ref))
   and defines `tables` to read them back;
 - `:argument` leaves `tables` to the caller, who supplies a `NamedTuple` with a
-  field per table the graph names.
+  field per table the script reads.
 
-A write node keeps its binding, but nothing downstream reads it and no target
-loads it — a run passes a write node's input through, and including a script
-must not write files. The commented `scan` line at the foot is how to run one.
+A write node hanging off the exported pipelines keeps its binding, but nothing
+downstream reads it and no target loads it — a run passes a write node's input
+through, and including a script must not write files. The commented `scan` line
+at the foot is how to run one.
 """
 function exportjulia(s::Session; tables::Symbol = :argument, targets = nothing,
     context::AbstractString = "analysis", dir::Union{Nothing,AbstractString} = nothing)
@@ -219,8 +226,9 @@ function scripttext(s::Session, tablemode::Symbol, targets, ctxname::String, dir
     haskey(s.contexts, ctxname) ||
         throw(ArgumentError("the session has no context $(repr(ctxname))"))
     wanted = targets === nothing ? defaulttargets(s) : totargets(s, targets)
-    bindings, body, calls, writes = bindinglines(s, wanted)
-    names = tablenames(s.graph)
+    keep = exportnodes(s.graph, wanted)
+    bindings, body, calls, writes = bindinglines(s, wanted, keep)
+    names = tablenames(s.graph, keep)
     snapshots = Dict{String,TableFile}()
     if tablemode === :snapshot
         for name in names
@@ -258,15 +266,35 @@ function defaulttargets(s::Session)
     return wanted
 end
 
+# The nodes a script holds: what the targets need, as a run compiles them, plus
+# the write nodes hanging off that much of the graph. A write is an endpoint no
+# target loads, but the script still shows it and the commented `scan` line that
+# runs it; one fed by nothing, or by a node this leaves out, is left out too.
+function exportnodes(g::Graph, wanted)
+    keep = Set{String}(id for (id, _) in wanted)
+    for (id, _) in wanted
+        union!(keep, ancestors(g, id))
+    end
+    for id in topoorder(g)
+        iswrite(nodekind(g.nodes[id].kind)) || continue
+        up = ancestors(g, id)
+        isempty(up) || !issubset(up, keep) || push!(keep, id)
+    end
+    return keep
+end
+
 # One binding per node output that something reads or loads, in topological
-# order, with each node's errors attributed to it as a run's are.
-function bindinglines(s::Session, wanted)
+# order, with each node's errors attributed to it as a run's are. Only the nodes
+# in `keep` are emitted, so a node the targets do not reach cannot fail the
+# export any more than it fails a run.
+function bindinglines(s::Session, wanted, keep)
     g = s.graph
     bindings = Dict{Tuple{String,Symbol},Symbol}()
     lines = String[]
     calls = Set{Symbol}()
     writes = Tuple{String,Symbol}[]
     for id in topoorder(g)
+        id in keep || continue
         node = g.nodes[id]
         kind = nodekind(node.kind)
         ins = Dict{Symbol,Any}()
@@ -401,10 +429,12 @@ end
 timeexpr(t) =
     throw(ArgumentError("cannot export a context whose time is a $(typeof(t))"))
 
-# The tables the graph names, in the order its nodes name them.
-function tablenames(g::Graph)
+# The tables the exported nodes name, in the order they name them: a table only a
+# left-out node reads is neither declared nor snapshotted.
+function tablenames(g::Graph, keep)
     names = String[]
     for id in topoorder(g)
+        id in keep || continue
         node = g.nodes[id]
         kind = nodekind(node.kind)
         kind isa OpKind || continue

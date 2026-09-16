@@ -87,6 +87,13 @@ function readsession(path::AbstractString)
         throw(ArgumentError("$path is not a Loki session file: it has no version"))
     version <= SESSIONVERSION || throw(ArgumentError("$path was written by a newer \
         Loki (format version $version); this one reads version $SESSIONVERSION"))
+    # The sections `opensession` reads outright. A missing one is a truncated file,
+    # not an empty session: `prelude`, `nextid` and `tables` are the optional ones.
+    for (name, T) in ((:contexts, JSON3.Object), (:nodes, JSON3.Array),
+        (:edges, JSON3.Array))
+        get(doc, name, nothing) isa T ||
+            throw(ArgumentError("$path is not a Loki session file: it has no $name"))
+    end
     return doc
 end
 
@@ -132,10 +139,25 @@ end
 
 function tableentries(s::Session, path::AbstractString, base::AbstractString)
     names = sort!(collect(keys(s.tables)))
-    isempty(names) && return NamedTuple[]
     dir = tabledir(path)
+    isempty(names) && !isdir(dir) && return NamedTuple[]
     mkpath(dir)
-    return [tableentry(name, savetable(dir, name, s.tables[name]), base) for name in names]
+    files = [savetable(dir, name, s.tables[name]) for name in names]
+    prunetables(dir, Set(basename(f.path) for f in files))
+    return [tableentry(name, file, base) for (name, file) in zip(names, files)]
+end
+
+# A `<stem>.tables/` directory is Loki's: a table dropped or renamed since the last
+# save, or one whose frame now needs JLS where it needed parquet, leaves a snapshot
+# nothing references. Only the two extensions `savetable` writes are swept, so
+# anything else in the directory is left alone.
+function prunetables(dir::AbstractString, keep::Set{String})
+    for name in readdir(dir)
+        name in keep && continue
+        file = joinpath(dir, name)
+        isfile(file) && last(splitext(name)) in (".parquet", ".jls") && rm(file)
+    end
+    return nothing
 end
 
 tableentry(name::AbstractString, file::TableFile, base::AbstractString) =

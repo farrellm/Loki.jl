@@ -359,8 +359,20 @@ end
         e
     end
     @test err isa ArgumentError
-    @test occursin("tag", err.msg)
+    @test occursin("its column tag holds Symbol", err.msg)
     @test occursin("tables = :argument", err.msg)
+
+    # A table that will not say what its columns hold cannot be checked, and the
+    # error says that rather than naming a column called `unknown`.
+    rows = Any[(time = 1, tag = :a), (time = 2, tag = :b)]
+    err = try
+        Loki.savetable(dir, "rows", rows)
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("its columns have unknown type", err.msg)
+    @test !occursin("column unknown", err.msg)
 end
 
 # A session covering the shapes a script has to get right: a prelude the row
@@ -480,6 +492,46 @@ framebinding(s, id, port) =
         Loki.setcontext!(s3, "my window", Context(0, 5))
         Loki.addnode!(s3, "emptyframe")
         @test_throws ArgumentError exportjulia(s3)
+    end
+
+    @testset "only what the targets need" begin
+        dir = mktempdir()
+        prices = DataFrame(time = 1:10, x = collect(1.0:10.0))
+        scratch = DataFrame(time = 1:10, y = collect(1.0:10.0))
+        s = Loki.Session(; tables = (prices = prices, scratch = scratch),
+            contexts = (analysis = Context(0, 11),))
+        src = Loki.addnode!(s, "table", Dict("table" => "prices"))
+        logc = Loki.addnode!(s, "logtransform", Dict("column" => "x"))
+        writer = Loki.addnode!(s, "writecsv", Dict("path" => joinpath(dir, "out.csv")))
+        Loki.connect!(s, (src, :out), (logc, :in))
+        Loki.connect!(s, (logc, :out), (writer, :in))
+        # An unfinished branch the targets do not reach: a table nothing reads, a
+        # node with nothing wired into it, and a write fed by neither.
+        other = Loki.addnode!(s, "table", Dict("table" => "scratch"))
+        lonely = Loki.addnode!(s, "difference", Dict("column" => "y"))
+        stray = Loki.addnode!(s, "writecsv", Dict("path" => joinpath(dir, "stray.csv")))
+
+        # Exporting every sink does reach the half-wired node, and says so.
+        @test_throws Loki.NodeError exportjulia(s)
+
+        text = exportjulia(s; targets = [(logc, :out)])
+        @test occursin("p_$logc = ", text)
+        @test !occursin("p_$lonely", text)
+        @test !occursin("p_$other", text)
+        @test !occursin("p_$stray", text)
+        @test !occursin("scratch", text)
+        # A write hanging off an exported pipeline keeps its binding and the
+        # commented line that runs it, though no target loads it.
+        @test occursin("writecsv(", text)
+        @test occursin("# scan(analysis, p_$writer)", text)
+
+        # The last run's targets narrow it the same way, with no targets passed.
+        wait(Loki.run!(s, [(logc, :out)]))
+        @test exportjulia(s) == text
+
+        # A snapshot writes only the tables the script reads.
+        exportjulia(joinpath(dir, "script.jl"), s; targets = [(logc, :out)])
+        @test Set(readdir(dir)) == Set(["script.jl", "prices.parquet"])
     end
 end
 

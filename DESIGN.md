@@ -854,6 +854,14 @@ writes it to `path`:
    *input* — the pass-through a run compiles — and no target loads it, so
    including a script never writes a file; the commented `scan` line at the foot
    is how to run one;
+
+   The script holds what the targets need, as a run compiles them — their
+   ancestors, plus the write nodes hanging off that much of the graph — and not
+   the rest: a node the targets do not reach is left out, and a half-wired one
+   can no more fail an export than it fails a run. Exporting every sink, the
+   default with no run, does reach such a node and reports it. The session
+   *file* is not narrowed: it holds the whole graph, half-wired nodes included,
+   because it is the analysis and not a rendering of it;
 5. `load` of the watched nodes — the last run's targets, or every output nothing
    reads — as `frame_<id>[_<port>] = load(analysis, p_…)`.
 
@@ -872,7 +880,8 @@ snapshotted or supplied:
   frame semantics. A plain table parquet cannot hold is an error naming the
   column: freeze the node that produced it, or pass `tables = :argument`.
 - `tables = :argument` expects the caller to supply a `NamedTuple` with a field
-  per table the graph names.
+  per table the script reads. A table only a left-out node names is neither
+  declared nor snapshotted.
 
 Script text is printed by Loki's own emitter rather than `string(::Expr)`, so
 the output is stable enough to be golden-tested and diffed in version control;
@@ -899,10 +908,15 @@ frames for the same nodes. That is a test, not a hope.
 ```
 
 The header is the JLS file's precedent: a foreign or future file is reported as
-such, not as a parse failure. No data is stored in the session file; tables are
+such, not as a parse failure, and so is a file that carries the header but not
+the contexts, nodes and edges it must have. No data is stored in the session file; tables are
 referenced by path, and saving a session writes each one into a `<stem>.tables/`
 directory beside it, as an exported script's snapshots are written beside the
 script (see "Export") — a frozen frame carries the context it is read back over.
+That directory is Loki's, so saving again sweeps the snapshots nothing references
+any more (a table dropped or renamed, or a frame that now needs JLS where it
+needed parquet), leaving anything else in it alone; a script's directory is the
+caller's and is never swept.
 Parameters hold source text, never evaluated values, so a session file is as
 portable as the exported script. The graph's next id is saved with it, so an id
 freed before saving is not handed out again after opening; opening adds every

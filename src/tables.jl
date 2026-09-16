@@ -40,7 +40,7 @@ function savetable(dir::AbstractString, name::AbstractString, table)
     # fail deep inside the writer with an unrecognisable error.
     isfilename(name) || throw(ArgumentError("table name $(repr(name)) is not a file \
         name, so it cannot be snapshotted; rename it"))
-    bad = unstorablecolumn(table)
+    bad = unstorablereason(table)
     if table isa CausalFrame
         ctx = context(table)
         if bad === nothing
@@ -53,8 +53,8 @@ function savetable(dir::AbstractString, name::AbstractString, table)
         return TableFile(path, :jls, true, ctx)
     end
     bad === nothing || throw(ArgumentError("table $(repr(name)) cannot be \
-        snapshotted: its column $(bad[1]) holds $(bad[2]), which parquet cannot \
-        store. Freeze the node that produced it, or export with tables = :argument."))
+        snapshotted: $bad, which parquet cannot store. Freeze the node that \
+        produced it, or export with tables = :argument."))
     path = joinpath(dir, "$name.parquet")
     Parquet2.writefile(path, table)
     return TableFile(path, :parquet, false, nothing)
@@ -90,13 +90,15 @@ function tableexpr(file::TableFile)
     return Expr(:call, :load, contextexpr(file.context), source)
 end
 
-# The first column parquet cannot store, as (name, type), or `nothing`.
-function unstorablecolumn(table)
+# Why parquet cannot store this table, as a clause to interpolate, or `nothing`
+# when it can. A table that will not say what its columns hold cannot be checked,
+# so it is refused the same way.
+function unstorablereason(table)
     schema = Tables.schema(table)
     (schema === nothing || schema.types === nothing) &&
-        return (:unknown, "columns of unknown type")
+        return "its columns have unknown type"
     for (name, T) in zip(schema.names, schema.types)
-        parquetstorable(T) || return (name, T)
+        parquetstorable(T) || return "its column $name holds $T"
     end
     return nothing
 end
