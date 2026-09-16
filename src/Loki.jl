@@ -23,7 +23,7 @@ using Statistics: Statistics
 using DataFrames: DataFrame, nrow
 using Tables: Tables
 
-using LinearAlgebra: BLAS, I, dot
+using LinearAlgebra: I, dot, mul!
 using MatrixEquations: lyapd
 # Imported as a module: StateSpaceModels exports a `LinearRegression` that would
 # clash with CausalFrames'.
