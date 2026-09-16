@@ -24,13 +24,19 @@ using DataFrames: DataFrame, nrow
 using Tables: Tables
 
 using LinearAlgebra: I, dot, mul!
+# Imported as modules, never `using`'d: `StatsBase.pacf` would clash with Loki's
+# own exported `pacf`, and extending it on a `CausalFrame` would be piracy.
+import StatsBase
+import StatsFuns
+import HypothesisTests as HT
 using MatrixEquations: lyapd
 # Imported as a module: StateSpaceModels exports a `LinearRegression` that would
 # clash with CausalFrames'.
 import StateSpaceModels as SSM
 
 export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
-    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia
+    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia,
+    acf, pacf, adftest, ljungbox
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")

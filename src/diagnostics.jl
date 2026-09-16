@@ -418,3 +418,360 @@ function preview(frame::CausalFrame; offset::Integer = 0, limit::Integer = 100,
         summary = merge(basesummary(frame, nothing, key),
             Dict{String,Any}("matched" => total, "returned" => length(rows))))
 end
+
+# --- correlation ---------------------------------------------------------------
+#
+# ACF, PACF and Ljung-Box all assume evenly spaced observations, so each carries
+# the spacing warning. They also each have a length past which StatsBase or
+# HypothesisTests raises rather than returns; Loki clamps to that length and says
+# so, because a short window is exactly what a user pokes at first and a panel
+# that 500s is worse than one that says "40 lags asked, 12 available".
+
+# `z` for a two-sided interval at `level`: 1.96 at the conventional 0.95.
+function zscore(level::Real)
+    0 < level < 1 ||
+        throw(ArgumentError("level must be between 0 and 1, got $level"))
+    return StatsFuns.norminvcdf((1 + level) / 2)
+end
+
+# StatsBase's `autocor` needs `maxlag < n`; its `pacf` needs `2 * maxlag < n`.
+maxacflag(n::Integer) = max(n - 1, 0)
+maxpacflag(n::Integer) = max((n - 1) ÷ 2, 0)
+
+function chooselags(requested, available::Integer, warnings::Vector{String}, what::String)
+    wanted = requested === nothing ? 40 : Int(requested)
+    wanted >= 1 || throw(ArgumentError("$what needs at least one lag, got $wanted"))
+    wanted <= available && return wanted, false
+    push!(warnings, "$what was asked for $wanted lags but this window supports \
+        $available; showing $available")
+    return available, true
+end
+
+function correlogram(kind::Symbol, frame::CausalFrame, column::Symbol, lags, key,
+    level::Real, compute)
+    col = Symbol(column)
+    warnings = String[]
+    summary = basesummary(frame, col, key)
+    v = numericvalues(frame, col; key)
+    summary["n"] = length(v.values)
+    summary["missing"] = v.dropped
+    spacingwarnings!(warnings, summary, v.times, col)
+    n = length(v.values)
+    available = kind === :acf ? maxacflag(n) : maxpacflag(n)
+    if available < 1
+        push!(warnings, "too few rows for $(kind): $n")
+        return DiagnosticResult(kind;
+            data = Dict{String,Any}("lags" => Int[], "values" => Any[],
+                "band" => nothing, "level" => Float64(level)),
+            summary, warnings)
+    end
+    k, clamped = chooselags(lags, available, warnings, String(kind))
+    values = try
+        compute(v.values, k)
+    catch err
+        err isa InterruptException && rethrow()
+        # A singular window — a constant series, a perfectly periodic one — is a
+        # property of the data, not a bug. Report it where the user can see it.
+        push!(warnings, "$(kind) could not be computed for this window: \
+            $(sprint(showerror, err))")
+        fill(NaN, kind === :acf ? k + 1 : k)
+    end
+    lagindex = kind === :acf ? collect(0:k) : collect(1:k)
+    band = zscore(level) / sqrt(n)
+    significant = [lagindex[i] for i in eachindex(values)
+                   if lagindex[i] != 0 && isfinite(values[i]) && abs(values[i]) > band]
+    summary["lags"] = k
+    summary["clamped"] = clamped
+    summary["band"] = jsonnumber(band)
+    summary["values"] = jsonnumbers(values)
+    summary["significant"] = significant
+    return DiagnosticResult(kind;
+        data = Dict{String,Any}("lags" => lagindex, "values" => jsonnumbers(values),
+            "band" => jsonnumber(band), "level" => Float64(level)),
+        summary, warnings)
+end
+
+"""
+    acf(frame::CausalFrame, column; lags = 40, key = nothing, demean = true,
+        level = 0.95) -> Loki.DiagnosticResult
+
+The autocorrelation function of a column over the whole window, with the
+±z/√n significance band at `level`. `missing` rows are dropped and counted, and
+the summary lists the lags outside the band — the ones a Box–Jenkins reading
+starts from.
+
+More lags than the window supports are clamped with a warning rather than
+raised, and so is a window whose autocorrelation is not computable at all.
+"""
+acf(frame::CausalFrame, column::Union{Symbol,AbstractString}; lags = nothing,
+    key = nothing, demean::Bool = true, level::Real = 0.95) =
+    correlogram(:acf, frame, Symbol(column), lags, key, level,
+        (v, k) -> StatsBase.autocor(v, 0:k; demean))
+
+"""
+    pacf(frame::CausalFrame, column; lags = 40, key = nothing,
+         method = :regression, level = 0.95) -> Loki.DiagnosticResult
+
+The partial autocorrelation function, as [`acf`](@ref) but from lag 1 and
+through StatsBase's `pacf`. The window supports half as many lags as `acf`
+does — `2 · lags < n` — and asking for more clamps with a warning.
+"""
+pacf(frame::CausalFrame, column::Union{Symbol,AbstractString}; lags = nothing,
+    key = nothing, method::Symbol = :regression, level::Real = 0.95) =
+    correlogram(:pacf, frame, Symbol(column), lags, key, level,
+        (v, k) -> StatsBase.pacf(v, 1:k; method))
+
+# --- the degrees of freedom a residual test needs ------------------------------
+
+"""
+    Loki.armadof(frame::CausalFrame; column = nothing) -> Union{Nothing,Int}
+
+The degrees of freedom a Ljung–Box test on this frame's residuals should give
+up — `p + q + P + Q` — read from a [`FittedARMA`](@ref) column, or `nothing`
+when the frame has none.
+
+A frame usually has none: [`applyarma`](@ref) drops the model column, so an
+in-sample residual stream carries no model. The fit node's own parameters are
+the other route, and the server's diagnostics endpoint takes it.
+"""
+function armadof(frame::CausalFrame; column = nothing)
+    sch = Tables.schema(frame)
+    name = if column === nothing
+        i = findfirst(T -> Base.nonmissingtype(T) <: FittedARMA, collect(sch.types))
+        i === nothing && return nothing
+        sch.names[i]
+    else
+        Symbol(column)
+    end
+    Base.nonmissingtype(columntype(sch, name)) <: FittedARMA || return nothing
+    models = getproperty(columnvectors(frame, name), name)
+    i = findlast(m -> m isa FittedARMA, models)
+    i === nothing && return nothing
+    fm = models[i]
+    p, _, q = fm.order
+    P, _, Q, _ = fm.seasonal_order
+    return p + q + P + Q
+end
+
+"""
+    ljungbox(frame::CausalFrame, column; lags = [10, 20, 40], dof = nothing,
+             key = nothing, modelcolumn = nothing) -> Loki.DiagnosticResult
+
+The Ljung–Box test for autocorrelation, at one lag count or several. On a
+residual column the model's own parameters must be given up as degrees of
+freedom: `dof` if given, else `p + q + P + Q` from a [`FittedARMA`](@ref) column
+in the frame (see [`Loki.armadof`](@ref)), else `0` with a warning — the summary
+says which, as `dofsource`.
+
+A lag count the window cannot support, or one not above `dof`, is dropped with a
+warning rather than raised.
+"""
+function ljungbox(frame::CausalFrame, column::Union{Symbol,AbstractString};
+    lags = nothing, dof = nothing, key = nothing, modelcolumn = nothing)
+    col = Symbol(column)
+    warnings = String[]
+    summary = basesummary(frame, col, key)
+    v = numericvalues(frame, col; key)
+    n = length(v.values)
+    summary["n"] = n
+    summary["missing"] = v.dropped
+    spacingwarnings!(warnings, summary, v.times, col)
+
+    d, source = if dof !== nothing
+        Int(dof), "given"
+    else
+        found = armadof(frame; column = modelcolumn)
+        found === nothing ? (0, "none") : (found, "model")
+    end
+    source == "none" && push!(warnings, "no model column in this frame, so the test \
+        gives up no degrees of freedom; pass dof if these are residuals")
+    summary["dof"] = d
+    summary["dofsource"] = source
+
+    wanted = lags === nothing ? [10, 20, 40] :
+             lags isa Integer ? [Int(lags)] : Int[Int(l) for l in lags]
+    tests = Any[]
+    pvalues = Dict{String,Any}()
+    for k in wanted
+        if k <= d
+            push!(warnings, "skipping $k lags: the test needs more lags than the $d \
+                degrees of freedom it gives up")
+            continue
+        elseif k >= n
+            push!(warnings, "skipping $k lags: the window has $n rows")
+            continue
+        end
+        t = try
+            HT.LjungBoxTest(v.values, k, d)
+        catch err
+            err isa InterruptException && rethrow()
+            push!(warnings, "skipping $k lags: $(sprint(showerror, err))")
+            continue
+        end
+        p = HT.pvalue(t)
+        push!(tests,
+            Dict{String,Any}("lags" => k, "dof" => d, "statistic" => jsonnumber(t.Q),
+                "pvalue" => jsonnumber(p)))
+        pvalues[string(k)] = jsonnumber(p)
+    end
+    summary["pvalues"] = pvalues
+    # White noise until some lag count says otherwise; no test at all is no verdict.
+    summary["whitenoise"] =
+        isempty(tests) ? nothing : all(t -> something(t["pvalue"], 1.0) > 0.05, tests)
+    return DiagnosticResult(:ljungbox;
+        data = Dict{String,Any}("tests" => tests), summary, warnings)
+end
+
+"""
+    adftest(frame::CausalFrame, column; key = nothing, deterministic = :constant,
+            lag = nothing) -> Loki.DiagnosticResult
+
+The augmented Dickey–Fuller test for a unit root: a small p-value is evidence
+*against* one, so `stationary` in the summary is `pvalue < 0.05`. `lag` defaults
+to Schwert's rule, `⌊12 (n/100)^¼⌋`, clamped to what the window supports.
+"""
+function adftest(frame::CausalFrame, column::Union{Symbol,AbstractString};
+    key = nothing, deterministic::Symbol = :constant, lag = nothing)
+    col = Symbol(column)
+    warnings = String[]
+    summary = basesummary(frame, col, key)
+    v = numericvalues(frame, col; key)
+    n = length(v.values)
+    summary["n"] = n
+    summary["missing"] = v.dropped
+    summary["deterministic"] = String(deterministic)
+    schwert = floor(Int, 12 * (n / 100)^0.25)
+    k = lag === nothing ? schwert : Int(lag)
+    k = clamp(k, 0, max((n - 4) ÷ 3, 0))
+    result = n < 8 ? nothing : try
+        HT.ADFTest(v.values, deterministic, k)
+    catch err
+        err isa InterruptException && rethrow()
+        push!(warnings, "the ADF test could not be computed: $(sprint(showerror, err))")
+        nothing
+    end
+    n < 8 && push!(warnings, "too few rows for an ADF test: $n")
+    if result === nothing
+        summary["lag"] = k
+        summary["statistic"] = nothing
+        summary["pvalue"] = nothing
+        summary["stationary"] = nothing
+        return DiagnosticResult(:adftest; data = copy(summary), summary, warnings)
+    end
+    p = HT.pvalue(result)
+    summary["lag"] = result.lag
+    summary["statistic"] = jsonnumber(result.stat)
+    summary["pvalue"] = jsonnumber(p)
+    summary["stationary"] = isfinite(p) ? p < 0.05 : nothing
+    summary["criticalvalues"] =
+        Dict{String,Any}(zip(("1%", "5%", "10%"), jsonnumbers(result.cv)))
+    return DiagnosticResult(:adftest; data = copy(summary), summary, warnings)
+end
+
+# --- distribution --------------------------------------------------------------
+
+# Freedman–Diaconis: bin width 2·IQR·n^(-1/3), which is robust to the outliers a
+# residual distribution has. A zero IQR (a near-constant series) falls back to
+# Sturges' rule, which depends only on the count.
+function fdbins(v::AbstractVector{Float64})
+    n = length(v)
+    n < 2 && return 1
+    lo, hi = extrema(v)
+    hi > lo || return 1
+    iqr = Statistics.quantile(v, 0.75) - Statistics.quantile(v, 0.25)
+    width = 2 * iqr * n^(-1 / 3)
+    width > 0 || return max(ceil(Int, log2(n)) + 1, 1)
+    return clamp(ceil(Int, (hi - lo) / width), 1, 200)
+end
+
+"""
+    Loki.histogram(frame::CausalFrame, column; key = nothing, bins = nothing)
+        -> Loki.DiagnosticResult
+
+The distribution of a column, against the normal fitted to it. `bins` defaults
+to the Freedman–Diaconis rule. The summary carries the first four moments, which
+is what a residual panel reports beside the plot.
+"""
+function histogram(frame::CausalFrame, column::Union{Symbol,AbstractString};
+    key = nothing, bins = nothing)
+    col = Symbol(column)
+    warnings = String[]
+    summary = basesummary(frame, col, key)
+    v = numericvalues(frame, col; key)
+    values = v.values
+    n = length(values)
+    merge!(summary, seriessummary(values, v.dropped))
+    summary["skewness"] = n > 2 ? jsonnumber(StatsBase.skewness(values)) : nothing
+    summary["kurtosis"] = n > 3 ? jsonnumber(StatsBase.kurtosis(values)) : nothing
+    summary["median"] = n > 0 ? jsonnumber(Statistics.median(values)) : nothing
+    if n == 0
+        push!(warnings, "nothing to plot: every row of $(repr(String(col))) is missing")
+        return DiagnosticResult(:histogram;
+            data = Dict{String,Any}("edges" => Any[], "counts" => Int[],
+                "density" => Any[], "normal" => nothing), summary, warnings)
+    end
+    lo, hi = extrema(values)
+    hi > lo || (hi = lo + 1.0)
+    k = bins === nothing ? fdbins(values) : max(Int(bins), 1)
+    width = (hi - lo) / k
+    edges = [lo + i * width for i in 0:k]
+    counts = zeros(Int, k)
+    for x in values
+        counts[clamp(floor(Int, (x - lo) / width) + 1, 1, k)] += 1
+    end
+    m = moments(values)
+    sd = isfinite(m.std) && m.std > 0 ? m.std : nothing
+    normal = if sd === nothing
+        nothing
+    else
+        xs = [lo + (hi - lo) * i / 100 for i in 0:100]
+        Dict{String,Any}("mean" => jsonnumber(m.mean), "std" => jsonnumber(sd),
+            "x" => jsonnumbers(xs),
+            "pdf" => jsonnumbers(StatsFuns.normpdf.(m.mean, sd, xs)))
+    end
+    return DiagnosticResult(:histogram;
+        data = Dict{String,Any}("edges" => jsonnumbers(edges), "counts" => counts,
+            "density" => jsonnumbers(counts ./ (n * width)), "normal" => normal),
+        summary, warnings)
+end
+
+"""
+    Loki.qqplot(frame::CausalFrame, column; key = nothing, maxpoints = 2000)
+        -> Loki.DiagnosticResult
+
+A normal quantile–quantile plot: the sorted values against `Φ⁻¹((i - ½)/n)`, with
+the line through the fitted normal. `correlation` in the summary is how straight
+the plot is — near 1 is normal — and a long series is thinned to `maxpoints`
+evenly spaced quantiles.
+"""
+function qqplot(frame::CausalFrame, column::Union{Symbol,AbstractString};
+    key = nothing, maxpoints::Integer = 2000)
+    col = Symbol(column)
+    warnings = String[]
+    summary = basesummary(frame, col, key)
+    v = numericvalues(frame, col; key)
+    sample = sort(v.values)
+    n = length(sample)
+    m = moments(sample)
+    summary["n"] = n
+    summary["missing"] = v.dropped
+    summary["mean"] = jsonnumber(m.mean)
+    summary["std"] = jsonnumber(m.std)
+    if n < 2
+        push!(warnings, "too few rows for a QQ plot: $n")
+        summary["correlation"] = nothing
+        return DiagnosticResult(:qqplot;
+            data = Dict{String,Any}("theoretical" => Any[], "sample" => Any[],
+                "line" => nothing), summary, warnings)
+    end
+    theoretical = [StatsFuns.norminvcdf((i - 0.5) / n) for i in 1:n]
+    idx = n <= maxpoints ? (1:n) :
+          unique(round.(Int, range(1, n; length = maxpoints)))
+    summary["correlation"] = jsonnumber(Statistics.cor(theoretical, sample))
+    sd = isfinite(m.std) && m.std > 0 ? m.std : 1.0
+    return DiagnosticResult(:qqplot;
+        data = Dict{String,Any}("theoretical" => jsonnumbers(view(theoretical, idx)),
+            "sample" => jsonnumbers(view(sample, idx)),
+            "line" => Dict{String,Any}("intercept" => jsonnumber(m.mean),
+                "slope" => jsonnumber(sd))), summary, warnings)
+end

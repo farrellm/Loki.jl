@@ -6,6 +6,10 @@
 using Dates: Dates
 using JSON3: JSON3
 using Random: Xoshiro, randn
+import HypothesisTests as HT
+import StatsBase
+import StatsFuns
+using Statistics: Statistics
 
 const DIAGCTX = Context(0, 101)
 
@@ -196,5 +200,179 @@ end
         @test e.data["total"] == 0
         @test JSON3.read(JSON3.write(e)).data.total == 0
         @test_throws ArgumentError Loki.seriesplot(empt, :x)
+    end
+end
+
+@testset "correlation and distribution diagnostics" begin
+    rng = Xoshiro(29)
+    # An AR(1), so the ACF decays and the PACF cuts off after lag 1.
+    y = zeros(400)
+    for t in 2:400
+        y[t] = 0.7 * y[t-1] + randn(rng)
+    end
+    df = DataFrame(time = 1:400, y = y, k = repeat(["a", "b"], 200))
+    ctx = Context(0, 401)
+    whole = CausalFrame(ctx, df)
+    chunked = CausalFrame(ctx, [df[1:130, :], df[131:290, :], df[291:400, :]])
+
+    @testset "acf and pacf" begin
+        a = acf(whole, :y; lags = 20)
+        @test a.kind === :acf
+        @test a.data["lags"] == collect(0:20)
+        # The values are StatsBase's; what Loki adds is the band and the reading.
+        @test a.data["values"] ≈ StatsBase.autocor(y, 0:20)
+        @test a.data["band"] ≈ 1.959963984540054 / sqrt(400) rtol = 1e-9
+        @test a.data["values"][1] == 1.0
+        @test 1 in a.summary["significant"] && 0 ∉ a.summary["significant"]
+        @test a.summary["clamped"] == false
+        @test isempty(a.warnings)
+        @test samediagnostic(acf(chunked, :y; lags = 20), a)
+
+        p = pacf(whole, :y; lags = 20)
+        @test p.data["lags"] == collect(1:20)
+        @test p.data["values"] ≈ StatsBase.pacf(y, 1:20)
+        # AR(1): lag 1 spikes and dominates. A 5% band lets roughly one of the
+        # remaining 19 lags cross by chance, so "only lag 1" would be a flaky test.
+        @test 1 in p.summary["significant"]
+        @test argmax(abs.(p.data["values"])) == 1
+        @test all(v -> abs(v) < 0.5 * abs(p.data["values"][1]), p.data["values"][2:end])
+        @test samediagnostic(pacf(chunked, :y; lags = 20), p)
+
+        # A wider band admits fewer lags.
+        @test length(acf(whole, :y; lags = 20, level = 0.999).summary["significant"]) <=
+              length(a.summary["significant"])
+        @test_throws ArgumentError acf(whole, :y; level = 1.0)
+        @test_throws ArgumentError acf(whole, :y; lags = 0)
+    end
+
+    @testset "acf and pacf clamp rather than raise" begin
+        short = CausalFrame(Context(0, 11), DataFrame(time = 1:10, y = y[1:10]))
+        a = acf(short, :y; lags = 40)
+        @test a.summary["lags"] == 9 && a.summary["clamped"]
+        @test occursin("supports 9", only(a.warnings))
+        # PACF supports half as many lags as ACF: StatsBase needs 2·maxlag < n.
+        p = pacf(short, :y; lags = 40)
+        @test p.summary["lags"] == 4
+        @test length(p.data["values"]) == 4
+
+        # A constant window has no correlogram at all, which is data, not a bug.
+        flat = CausalFrame(Context(0, 31), DataFrame(time = 1:30, y = fill(2.0, 30)))
+        c = acf(flat, :y; lags = 5)
+        @test all(v -> v === nothing, c.data["values"][2:end])
+        @test isempty(c.summary["significant"])
+        @test !occursin("NaN", JSON3.write(c))
+    end
+
+    @testset "irregular spacing warns with the fix" begin
+        gappy = DataFrame(time = [1, 2, 3, 4, 9, 10, 11, 12], y = y[1:8])
+        frame = CausalFrame(Context(0, 13), gappy)
+        for r in (acf(frame, :y; lags = 3), pacf(frame, :y; lags = 2),
+            ljungbox(frame, :y; lags = 3, dof = 0))
+            @test any(w -> occursin("not evenly spaced", w), r.warnings)
+            @test r.summary["suggestion"] == "intervalize(clock(1), Last(:y))"
+        end
+        @test isempty(filter(w -> occursin("evenly spaced", w),
+            acf(whole, :y; lags = 3).warnings))
+    end
+
+    @testset "adftest" begin
+        r = adftest(whole, :y)
+        reference = HT.ADFTest(y, :constant, r.summary["lag"])
+        @test r.summary["statistic"] ≈ reference.stat
+        @test r.summary["pvalue"] ≈ HT.pvalue(reference)
+        @test r.summary["stationary"] == (HT.pvalue(reference) < 0.05)
+        @test sort(collect(keys(r.summary["criticalvalues"]))) == ["1%", "10%", "5%"]
+        @test r.summary["lag"] == floor(Int, 12 * (400 / 100)^0.25)
+        @test samediagnostic(adftest(chunked, :y), r)
+
+        # A random walk is the textbook unit root; its difference is not.
+        walk = CausalFrame(ctx, DataFrame(time = 1:400, y = cumsum(y)))
+        @test adftest(walk, :y).summary["stationary"] == false
+        @test adftest(whole, :y).summary["stationary"] == true
+
+        tiny = CausalFrame(Context(0, 6), DataFrame(time = 1:5, y = y[1:5]))
+        t = adftest(tiny, :y)
+        @test t.summary["pvalue"] === nothing
+        @test occursin("too few rows", only(t.warnings))
+    end
+
+    @testset "ljungbox" begin
+        r = ljungbox(whole, :y; lags = [10, 20], dof = 1)
+        @test length(r.data["tests"]) == 2
+        reference = HT.LjungBoxTest(y, 10, 1)
+        @test r.data["tests"][1]["statistic"] ≈ reference.Q
+        @test r.data["tests"][1]["pvalue"] ≈ HT.pvalue(reference)
+        @test r.summary["dofsource"] == "given"
+        @test r.summary["whitenoise"] == false      # it is an AR(1), not noise
+        @test collect(keys(r.summary["pvalues"])) ⊆ ["10", "20"]
+        @test samediagnostic(ljungbox(chunked, :y; lags = [10, 20], dof = 1), r)
+
+        noise = CausalFrame(ctx, DataFrame(time = 1:400, y = randn(Xoshiro(5), 400)))
+        @test ljungbox(noise, :y; lags = 20).summary["whitenoise"] == true
+
+        # Neither `dof >= lag` nor a lag past the window raises; both are dropped.
+        dropped = ljungbox(whole, :y; lags = [3, 10], dof = 5)
+        @test [t["lags"] for t in dropped.data["tests"]] == [10]
+        @test any(w -> occursin("degrees of freedom", w), dropped.warnings)
+        short = CausalFrame(Context(0, 9), DataFrame(time = 1:8, y = y[1:8]))
+        @test isempty(ljungbox(short, :y; lags = 20, dof = 0).data["tests"])
+        @test ljungbox(short, :y; lags = 20, dof = 0).summary["whitenoise"] === nothing
+    end
+
+    @testset "dof comes from the model when the frame has one" begin
+        models = load(Context(0, 121),
+            readtable((time = collect(1:120), y = y[1:120])) |>
+            fitarma(:y; order = (2, 0, 1)))
+        @test Loki.armadof(models) == 3
+        @test Loki.armadof(models; column = :model) == 3
+        @test Loki.armadof(whole) === nothing
+        # `applyarma` drops the model column, so an in-sample stream has none —
+        # which is why the server supplies `dof` from the fit node's parameters.
+        insample = load(Context(0, 121),
+            readtable((time = collect(1:120), y = y[1:120])) |>
+            Loki.Acausal.insample(FitARMA(:y; order = (2, 0, 1))))
+        @test Loki.armadof(insample) === nothing
+        @test ljungbox(insample, :y_residual; lags = 20).summary["dofsource"] == "none"
+        @test ljungbox(insample, :y_residual; lags = 20, dof = 3).summary["dof"] == 3
+    end
+
+    @testset "histogram" begin
+        r = Loki.histogram(whole, :y)
+        @test sum(r.data["counts"]) == 400
+        @test length(r.data["edges"]) == length(r.data["counts"]) + 1
+        @test r.summary["skewness"] ≈ StatsBase.skewness(y)
+        @test r.summary["kurtosis"] ≈ StatsBase.kurtosis(y)
+        @test r.summary["median"] ≈ Statistics.median(y)
+        @test r.data["normal"]["std"] ≈ r.summary["std"]
+        @test samediagnostic(Loki.histogram(chunked, :y), r)
+        @test length(Loki.histogram(whole, :y; bins = 7).data["counts"]) == 7
+
+        # A constant column has no width to bin and no normal to fit.
+        flat = CausalFrame(Context(0, 31), DataFrame(time = 1:30, y = fill(2.0, 30)))
+        f = Loki.histogram(flat, :y)
+        @test sum(f.data["counts"]) == 30
+        @test f.data["normal"] === nothing
+    end
+
+    @testset "qqplot" begin
+        r = Loki.qqplot(whole, :y)
+        @test length(r.data["sample"]) == 400
+        @test issorted(r.data["sample"])
+        @test r.data["theoretical"][1] ≈ StatsFuns.norminvcdf(0.5 / 400)
+        @test r.data["line"]["slope"] ≈ r.summary["std"]
+        @test samediagnostic(Loki.qqplot(chunked, :y), r)
+        # Normal data lies on the line; a heavily skewed sample does not.
+        normal = CausalFrame(ctx, DataFrame(time = 1:400, y = randn(Xoshiro(7), 400)))
+        skewed = CausalFrame(ctx, DataFrame(time = 1:400, y = exp.(randn(Xoshiro(7), 400))))
+        @test Loki.qqplot(normal, :y).summary["correlation"] > 0.99
+        @test Loki.qqplot(skewed, :y).summary["correlation"] <
+              Loki.qqplot(normal, :y).summary["correlation"]
+
+        thin = Loki.qqplot(whole, :y; maxpoints = 50)
+        @test length(thin.data["sample"]) == 50
+        @test thin.summary["n"] == 400
+
+        one = CausalFrame(Context(0, 2), DataFrame(time = [1], y = [1.0]))
+        @test Loki.qqplot(one, :y).data["line"] === nothing
     end
 end

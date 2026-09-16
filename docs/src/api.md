@@ -69,6 +69,23 @@ Loki.keyvalues
 Loki.lttb
 ```
 
+### Correlation and tests
+
+```@docs
+acf
+pacf
+ljungbox
+adftest
+Loki.armadof
+```
+
+### Distribution
+
+```@docs
+Loki.histogram
+Loki.qqplot
+```
+
 ## Export
 
 ```@docs
