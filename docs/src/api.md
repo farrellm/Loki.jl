@@ -58,6 +58,17 @@ Loki.nodekind
 Loki.nodekinds
 ```
 
+## Diagnostics
+
+```@docs
+Loki.DiagnosticResult
+Loki.seriesplot
+Loki.preview
+Loki.columnvectors
+Loki.keyvalues
+Loki.lttb
+```
+
 ## Export
 
 ```@docs

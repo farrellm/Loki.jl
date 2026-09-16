@@ -43,6 +43,7 @@ include("nodes/causalframes.jl")
 include("nodes/timeseries.jl")
 include("compile.jl")
 include("engine.jl")
+include("diagnostics.jl")
 include("session.jl")
 # After the session: `exportjulia` takes one, and everything else here is reached
 # from a node kind's `emit` at run time.

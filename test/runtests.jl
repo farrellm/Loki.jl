@@ -32,6 +32,7 @@ include("fixtures.jl")
     include("graph.jl")
     include("nodes.jl")
     include("engine.jl")
+    include("diagnostics.jl")
     include("export.jl")
     include("persist.jl")
 
