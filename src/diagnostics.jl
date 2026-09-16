@@ -187,8 +187,10 @@ The distinct values of the key `columns` in `frame`, in first-seen order — wha
 a diagnostic's key selector offers. Stops at `limit` distinct values.
 """
 function keyvalues(frame::CausalFrame, columns; limit::Integer = 1000)
-    cols = Symbol[Symbol(c) for c in (columns isa Union{Symbol,AbstractString} ?
-                                      (columns,) : columns)]
+    cols = Symbol[
+        Symbol(c) for c in (columns isa Union{Symbol,AbstractString} ?
+              (columns,) : columns)
+    ]
     isempty(cols) && return NamedTuple[]
     vectors = columnvectors(frame, cols...)
     seen = Set{Any}()
@@ -244,8 +246,11 @@ function spacingwarnings!(warnings::Vector{String}, summary::Dict{String,Any},
     s = spacing(times)
     s.regular && return warnings
     fix = "intervalize(clock($(spelldelta(s.delta))), Last($(repr(column))))"
-    pushwarning!(warnings, "time is not evenly spaced, and this diagnostic assumes it is; \
-        resample first with $fix")
+    pushwarning!(
+        warnings,
+        "time is not evenly spaced, and this diagnostic assumes it is; \
+        resample first with $fix",
+    )
     summary["suggestion"] = fix
     return warnings
 end
@@ -321,8 +326,9 @@ function basesummary(frame::CausalFrame, column, key)
     ctx = context(frame)
     return Dict{String,Any}("column" => column === nothing ? nothing : String(column),
         "rows" => nrow(frame),
-        "key" => isempty(keypairs(key)) ? nothing :
-                 Dict(String(k) => jsoncell(v) for (k, v) in keypairs(key)),
+        "key" =>
+            isempty(keypairs(key)) ? nothing :
+            Dict(String(k) => jsoncell(v) for (k, v) in keypairs(key)),
         "context" => Any[jsontime(ctx.start), jsontime(ctx.stop)])
 end
 
@@ -360,7 +366,8 @@ function onetrace(frame::CausalFrame, column::Symbol; key, maxpoints::Integer)
     if !(Base.nonmissingtype(T) <: Real)
         # A non-numeric column has no line to draw; say so rather than raise, so
         # one bad column does not lose the panel.
-        return (Dict{String,Any}("name" => String(column), "time" => Any[],
+        return (
+            Dict{String,Any}("name" => String(column), "time" => Any[],
                 "values" => Any[], "downsampled" => false,
                 "note" => "column holds $T, which is not numeric"),
             Dict{String,Any}("n" => 0, "missing" => nrow(frame)))
@@ -370,13 +377,15 @@ function onetrace(frame::CausalFrame, column::Symbol; key, maxpoints::Integer)
     times = cols.time
     if length(raw) <= maxpoints
         finite = Float64[Float64(v) for v in raw if !(v === missing) && isfinite(v)]
-        return (Dict{String,Any}("name" => String(column), "time" => jsontimes(times),
+        return (
+            Dict{String,Any}("name" => String(column), "time" => jsontimes(times),
                 "values" => jsonnumbers(raw), "downsampled" => false),
             seriessummary(finite, length(raw) - length(finite)))
     end
     v = numericvalues(frame, column; key)
     idx = lttb(map(timenumber, v.times), v.values, maxpoints)
-    return (Dict{String,Any}("name" => String(column),
+    return (
+        Dict{String,Any}("name" => String(column),
             "time" => jsontimes(view(v.times, idx)),
             "values" => jsonnumbers(view(v.values, idx)), "downsampled" => true),
         seriessummary(v.values, v.dropped))
@@ -396,9 +405,12 @@ function preview(frame::CausalFrame; offset::Integer = 0, limit::Integer = 100,
     offset >= 0 || throw(ArgumentError("preview offset must not be negative"))
     limit >= 0 || throw(ArgumentError("preview limit must not be negative"))
     sch = Tables.schema(frame)
-    wanted = columns === nothing ? collect(Symbol, sch.names) :
-             Symbol[Symbol(c) for c in
-                    (columns isa Union{Symbol,AbstractString} ? (columns,) : columns)]
+    wanted =
+        columns === nothing ? collect(Symbol, sch.names) :
+        Symbol[
+            Symbol(c) for c in
+            (columns isa Union{Symbol,AbstractString} ? (columns,) : columns)
+        ]
     for c in wanted
         schemaindex(sch, c)
     end
@@ -448,8 +460,11 @@ function chooselags(requested, available::Integer, warnings::Vector{String}, wha
     wanted = requested === nothing ? 40 : Int(requested)
     wanted >= 1 || throw(ArgumentError("$what needs at least one lag, got $wanted"))
     wanted <= available && return wanted, false
-    pushwarning!(warnings, "$what was asked for $wanted lags but this window supports \
-        $available; showing $available")
+    pushwarning!(
+        warnings,
+        "$what was asked for $wanted lags but this window supports \
+        $available; showing $available",
+    )
     return available, true
 end
 
@@ -478,14 +493,19 @@ function correlogram(kind::Symbol, frame::CausalFrame, column::Symbol, lags, key
         err isa InterruptException && rethrow()
         # A singular window — a constant series, a perfectly periodic one — is a
         # property of the data, not a bug. Report it where the user can see it.
-        pushwarning!(warnings, "$(kind) could not be computed for this window: \
-            $(sprint(showerror, err))")
+        pushwarning!(
+            warnings,
+            "$(kind) could not be computed for this window: \
+            $(sprint(showerror, err))",
+        )
         fill(NaN, kind === :acf ? k + 1 : k)
     end
     lagindex = kind === :acf ? collect(0:k) : collect(1:k)
     band = zscore(level) / sqrt(n)
-    significant = [lagindex[i] for i in eachindex(values)
-                   if lagindex[i] != 0 && isfinite(values[i]) && abs(values[i]) > band]
+    significant = [
+        lagindex[i] for i in eachindex(values)
+        if lagindex[i] != 0 && isfinite(values[i]) && abs(values[i]) > band
+    ]
     summary["lags"] = k
     summary["clamped"] = clamped
     summary["band"] = jsonnumber(band)
@@ -589,19 +609,26 @@ function ljungbox(frame::CausalFrame, column::Union{Symbol,AbstractString};
         found = armadof(frame; column = modelcolumn)
         found === nothing ? (0, "none") : (found, "model")
     end
-    source == "none" && pushwarning!(warnings, "no model column in this frame, so the test \
-        gives up no degrees of freedom; pass dof if these are residuals")
+    source == "none" && pushwarning!(
+        warnings,
+        "no model column in this frame, so the test \
+        gives up no degrees of freedom; pass dof if these are residuals",
+    )
     summary["dof"] = d
     summary["dofsource"] = source
 
-    wanted = lags === nothing ? [10, 20, 40] :
-             lags isa Integer ? [Int(lags)] : Int[Int(l) for l in lags]
+    wanted =
+        lags === nothing ? [10, 20, 40] :
+        lags isa Integer ? [Int(lags)] : Int[Int(l) for l in lags]
     tests = Any[]
     pvalues = Dict{String,Any}()
     for k in wanted
         if k <= d
-            pushwarning!(warnings, "skipping $k lags: the test needs more lags than the $d \
-                degrees of freedom it gives up")
+            pushwarning!(
+                warnings,
+                "skipping $k lags: the test needs more lags than the $d \
+                degrees of freedom it gives up",
+            )
             continue
         elseif k >= n
             pushwarning!(warnings, "skipping $k lags: the window has $n rows")
@@ -649,13 +676,18 @@ function adftest(frame::CausalFrame, column::Union{Symbol,AbstractString};
     schwert = floor(Int, 12 * (n / 100)^0.25)
     k = lag === nothing ? schwert : Int(lag)
     k = clamp(k, 0, max((n - 4) ÷ 3, 0))
-    result = n < 8 ? nothing : try
-        HT.ADFTest(v.values, deterministic, k)
-    catch err
-        err isa InterruptException && rethrow()
-        pushwarning!(warnings, "the ADF test could not be computed: $(sprint(showerror, err))")
-        nothing
-    end
+    result =
+        n < 8 ? nothing :
+        try
+            HT.ADFTest(v.values, deterministic, k)
+        catch err
+            err isa InterruptException && rethrow()
+            pushwarning!(
+                warnings,
+                "the ADF test could not be computed: $(sprint(showerror, err))",
+            )
+            nothing
+        end
     n < 8 && pushwarning!(warnings, "too few rows for an ADF test: $n")
     if result === nothing
         summary["lag"] = k
@@ -711,7 +743,10 @@ function histogram(frame::CausalFrame, column::Union{Symbol,AbstractString};
     summary["kurtosis"] = n > 3 ? jsonnumber(StatsBase.kurtosis(values)) : nothing
     summary["median"] = n > 0 ? jsonnumber(Statistics.median(values)) : nothing
     if n == 0
-        pushwarning!(warnings, "nothing to plot: every row of $(repr(String(col))) is missing")
+        pushwarning!(
+            warnings,
+            "nothing to plot: every row of $(repr(String(col))) is missing",
+        )
         return DiagnosticResult(:histogram;
             data = Dict{String,Any}("edges" => Any[], "counts" => Int[],
                 "density" => Any[], "normal" => nothing), summary, warnings)
@@ -803,18 +838,25 @@ function fitreport(frame::CausalFrame; column = :model, key = nothing)
     fitted = if col in Tables.schema(frame).names
         [m for m in getproperty(columnvectors(frame, col; key), col) if m !== missing]
     else
-        pushwarning!(warnings, "this frame has no column $(repr(String(col))); a fit node's             model port is where the models are")
+        pushwarning!(
+            warnings,
+            "this frame has no column $(repr(String(col))); a fit node's             model port is where the models are",
+        )
         Any[]
     end
     summary["models"] = length(fitted)
     if isempty(fitted)
-        isempty(warnings) && pushwarning!(warnings, "no model in column $(repr(String(col)))")
+        isempty(warnings) &&
+            pushwarning!(warnings, "no model in column $(repr(String(col)))")
         return DiagnosticResult(:fitreport; data = copy(summary), summary, warnings)
     end
     fm = last(fitted)
     if !(fm isa FittedARMA)
-        pushwarning!(warnings, "column $(repr(String(col))) holds a $(typeof(fm)), not a \
-            FittedARMA; an MLJ model's report comes from the modelreports operator")
+        pushwarning!(
+            warnings,
+            "column $(repr(String(col))) holds a $(typeof(fm)), not a \
+            FittedARMA; an MLJ model's report comes from the modelreports operator",
+        )
         summary["status"] = "unknown"
         summary["model"] = jsoncell(fm)
         return DiagnosticResult(:fitreport; data = copy(summary), summary, warnings)
@@ -840,8 +882,10 @@ end
 # which is the usual case on an in-sample stream, since `applyarma` drops it.
 function fittedmodels(frame::CausalFrame, column::Symbol, key)
     column in Tables.schema(frame).names || return FittedARMA[]
-    return FittedARMA[m for m in getproperty(columnvectors(frame, column; key), column)
-                      if m isa FittedARMA]
+    return FittedARMA[
+        m for m in getproperty(columnvectors(frame, column; key), column)
+        if m isa FittedARMA
+    ]
 end
 
 # A `SARIMA` over `ys` carrying `fm`'s fitted hyperparameters. StateSpaceModels
@@ -900,18 +944,24 @@ function forecastfan(frame::CausalFrame, column::Union{Symbol,AbstractString};
     source = models === nothing ? frame : models
     fitted = fittedmodels(source, Symbol(model), key)
     empty = Dict{String,Any}("history" => Dict{String,Any}("time" => Any[],
-            "values" => Any[]), "time" => Any[], "mean" => Any[],
+        "values" => Any[]), "time" => Any[], "mean" => Any[],
         "intervals" => Any[])
     if isempty(fitted)
-        pushwarning!(warnings, "no fitted model to forecast with: pass the fit node's \
-            model port as `models`, since applyarma drops the model column")
+        pushwarning!(
+            warnings,
+            "no fitted model to forecast with: pass the fit node's \
+            model port as `models`, since applyarma drops the model column",
+        )
         return DiagnosticResult(:forecastfan; data = empty, summary, warnings)
     end
     fm = last(fitted)
     summary["model"] = fitreport(source; column = Symbol(model), key).summary
     if fm.status !== :ok || fm.model === nothing
-        pushwarning!(warnings, "the model failed to fit, so there is nothing to \
-            forecast: $(fm.message)")
+        pushwarning!(
+            warnings,
+            "the model failed to fit, so there is nothing to \
+            forecast: $(fm.message)",
+        )
         return DiagnosticResult(:forecastfan; data = empty, summary, warnings)
     end
     (h >= 1 && !isempty(v.values)) || return DiagnosticResult(:forecastfan;
@@ -922,18 +972,26 @@ function forecastfan(frame::CausalFrame, column::Union{Symbol,AbstractString};
         SSM.forecast(refitted(fm, v.values), Int(h); filter = nonsteady(fm))
     catch err
         err isa InterruptException && rethrow()
-        pushwarning!(warnings, "the forecast could not be computed: $(sprint(showerror, err))")
+        pushwarning!(
+            warnings,
+            "the forecast could not be computed: $(sprint(showerror, err))",
+        )
         return DiagnosticResult(:forecastfan; data = empty, summary, warnings)
     end
     means = Float64[only(e) for e in fc.expected_value]
     sds = Float64[sqrt(max(only(c), 0.0)) for c in fc.covariance]
     times = futuretimes(v.times, h)
-    isempty(times) && pushwarning!(warnings, "the series is too short or too irregular to \
-        place the forecast in time")
-    keep = max(length(v.values) - history + 1, 1):length(v.values)
-    intervals = Any[Dict{String,Any}("level" => l,
-        "lower" => jsonnumbers(means .- zscore(l) .* sds),
-        "upper" => jsonnumbers(means .+ zscore(l) .* sds)) for l in ls]
+    isempty(times) && pushwarning!(
+        warnings,
+        "the series is too short or too irregular to \
+        place the forecast in time",
+    )
+    keep = max(length(v.values)-history+1, 1):length(v.values)
+    intervals = Any[
+        Dict{String,Any}("level" => l,
+            "lower" => jsonnumbers(means .- zscore(l) .* sds),
+            "upper" => jsonnumbers(means .+ zscore(l) .* sds)) for l in ls
+    ]
     summary["mean"] = jsonnumbers(means)
     summary["sd"] = jsonnumbers(sds)
     return DiagnosticResult(:forecastfan;
@@ -950,8 +1008,9 @@ end
 # or the series it came from.
 function residualcolumns(frame::CausalFrame, column::Symbol)
     names = Set(Tables.schema(frame).names)
-    base = endswith(String(column), "_residual") ?
-           Symbol(chop(String(column); tail = length("_residual"))) : column
+    base =
+        endswith(String(column), "_residual") ?
+        Symbol(chop(String(column); tail = length("_residual"))) : column
     residual = Symbol(base, :_residual)
     residual in names || throw(ArgumentError("no residual column for \
         $(repr(String(column))): expected $(repr(String(residual))). The frame has \
@@ -1015,29 +1074,37 @@ function residuals(frame::CausalFrame, column::Union{Symbol,AbstractString};
 
     inside, outside = splitatfit(frame, fitstop)
     fitted = inside === nothing ? frame : inside
-    inside === nothing && pushwarning!(warnings, "no row falls inside the fit window, so \
-        every residual here is out of sample")
+    inside === nothing && pushwarning!(
+        warnings,
+        "no row falls inside the fit window, so \
+        every residual here is out of sample",
+    )
     shape = cols.stdresidual === nothing ? cols.residual : cols.stdresidual
 
     panels = Dict{String,DiagnosticResult}(
         "series" => seriesplot(frame, cols.residual; key, maxpoints),
         "acf" => acf(fitted, cols.residual; lags, key, level),
         "pacf" => pacf(fitted, cols.residual; lags, key, level),
-        "ljungbox" => ljungbox(fitted, cols.residual; lags = [10, 20, 40], dof = d, key),
+        "ljungbox" =>
+            ljungbox(fitted, cols.residual; lags = [10, 20, 40], dof = d, key),
         "histogram" => histogram(fitted, shape; key),
         "qqplot" => qqplot(fitted, shape; key))
     if cols.fitted !== nothing && cols.actual !== nothing
         panels["fitted"] = seriesplot(frame, cols.actual, cols.fitted; key, maxpoints)
     else
-        pushwarning!(warnings, "no fitted-value column beside $(repr(String(cols.residual)))")
+        pushwarning!(
+            warnings,
+            "no fitted-value column beside $(repr(String(cols.residual)))",
+        )
     end
 
     lb = panels["ljungbox"]
     summary["residual"] = String(cols.residual)
     summary["dof"] = d
     summary["dofsource"] = lb.summary["dofsource"]
-    summary["fitstop"] = fitstop === nothing ? nothing :
-                         jsontime(fitstop isa Context ? fitstop.stop : fitstop)
+    summary["fitstop"] =
+        fitstop === nothing ? nothing :
+        jsontime(fitstop isa Context ? fitstop.stop : fitstop)
     summary["insample"] = halfsummary(inside, cols.residual, key)
     summary["outofsample"] = halfsummary(outside, cols.residual, key)
     summary["ljungbox"] = lb.summary["pvalues"]
@@ -1147,36 +1214,47 @@ function seriescolumns(params::AbstractDict)
 end
 
 const DIAGNOSTICKINDS = Dict{String,Any}(
-    "series" => (frame, p) -> seriesplot(frame, seriescolumns(p)...;
-        key = querykey(p), maxpoints = queryint(p, "maxpoints", 2000)),
-    "preview" => (frame, p) -> preview(frame; offset = queryint(p, "offset", 0),
-        limit = queryint(p, "limit", 100), columns = querycolumns(p),
-        key = querykey(p)),
-    "acf" => (frame, p) -> acf(frame, querycolumn(p); lags = queryint(p, "lags"),
-        key = querykey(p), level = queryfloat(p, "level", 0.95)),
-    "pacf" => (frame, p) -> pacf(frame, querycolumn(p); lags = queryint(p, "lags"),
-        key = querykey(p), level = queryfloat(p, "level", 0.95)),
-    "histogram" => (frame, p) -> histogram(frame, querycolumn(p); key = querykey(p),
-        bins = queryint(p, "bins")),
-    "qqplot" => (frame, p) -> qqplot(frame, querycolumn(p); key = querykey(p),
-        maxpoints = queryint(p, "maxpoints", 2000)),
-    "adf" => (frame, p) -> adftest(frame, querycolumn(p); key = querykey(p),
-        deterministic = querysymbol(p, "deterministic", :constant),
-        lag = queryint(p, "lag")),
-    "ljungbox" => (frame, p) -> ljungbox(frame, querycolumn(p); lags = querylags(p),
-        dof = queryint(p, "dof"), key = querykey(p),
-        modelcolumn = querysymbol(p, "modelcolumn")),
-    "fit" => (frame, p) -> fitreport(frame; column = querysymbol(p, "column", :model),
-        key = querykey(p)),
-    "forecast" => (frame, p) -> forecastfan(frame, querycolumn(p);
-        h = queryint(p, "h", 12), models = get(p, "models", nothing),
-        model = querysymbol(p, "model", :model), key = querykey(p),
-        levels = querylevels(p), history = queryint(p, "history", 200)),
-    "residuals" => (frame, p) -> residuals(frame, querycolumn(p); key = querykey(p),
-        lags = queryint(p, "lags"), dof = queryint(p, "dof"),
-        fitstop = get(p, "fitstop", nothing),
-        level = queryfloat(p, "level", 0.95),
-        maxpoints = queryint(p, "maxpoints", 2000)))
+    "series" =>
+        (frame, p) -> seriesplot(frame, seriescolumns(p)...;
+            key = querykey(p), maxpoints = queryint(p, "maxpoints", 2000)),
+    "preview" =>
+        (frame, p) -> preview(frame; offset = queryint(p, "offset", 0),
+            limit = queryint(p, "limit", 100), columns = querycolumns(p),
+            key = querykey(p)),
+    "acf" =>
+        (frame, p) -> acf(frame, querycolumn(p); lags = queryint(p, "lags"),
+            key = querykey(p), level = queryfloat(p, "level", 0.95)),
+    "pacf" =>
+        (frame, p) -> pacf(frame, querycolumn(p); lags = queryint(p, "lags"),
+            key = querykey(p), level = queryfloat(p, "level", 0.95)),
+    "histogram" =>
+        (frame, p) -> histogram(frame, querycolumn(p); key = querykey(p),
+            bins = queryint(p, "bins")),
+    "qqplot" =>
+        (frame, p) -> qqplot(frame, querycolumn(p); key = querykey(p),
+            maxpoints = queryint(p, "maxpoints", 2000)),
+    "adf" =>
+        (frame, p) -> adftest(frame, querycolumn(p); key = querykey(p),
+            deterministic = querysymbol(p, "deterministic", :constant),
+            lag = queryint(p, "lag")),
+    "ljungbox" =>
+        (frame, p) -> ljungbox(frame, querycolumn(p); lags = querylags(p),
+            dof = queryint(p, "dof"), key = querykey(p),
+            modelcolumn = querysymbol(p, "modelcolumn")),
+    "fit" =>
+        (frame, p) -> fitreport(frame; column = querysymbol(p, "column", :model),
+            key = querykey(p)),
+    "forecast" =>
+        (frame, p) -> forecastfan(frame, querycolumn(p);
+            h = queryint(p, "h", 12), models = get(p, "models", nothing),
+            model = querysymbol(p, "model", :model), key = querykey(p),
+            levels = querylevels(p), history = queryint(p, "history", 200)),
+    "residuals" =>
+        (frame, p) -> residuals(frame, querycolumn(p); key = querykey(p),
+            lags = queryint(p, "lags"), dof = queryint(p, "dof"),
+            fitstop = get(p, "fitstop", nothing),
+            level = queryfloat(p, "level", 0.95),
+            maxpoints = queryint(p, "maxpoints", 2000)))
 
 """
     Loki.diagnostics() -> Vector{String}

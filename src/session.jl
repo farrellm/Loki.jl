@@ -115,10 +115,11 @@ function statuschanged!(s::Session, id::AbstractString)
     return emit!(s, :node_status,
         Dict{String,Any}("id" => String(id),
             "status" => String(get(s.status, String(id), :idle)),
-            "error" => err === nothing ? nothing :
-                       Dict{String,Any}(
-                "node" => err isa NodeError ? err.id : String(id),
-                "message" => sprint(showerror, err))))
+            "error" =>
+                err === nothing ? nothing :
+                Dict{String,Any}(
+                    "node" => err isa NodeError ? err.id : String(id),
+                    "message" => sprint(showerror, err))))
 end
 
 buildenv(s::Session) = BuildEnv(s.usercode, s.contexts, s.tables)
@@ -393,9 +394,12 @@ end
 runprogress!(s::Session, run::Run, state::AbstractString; kwargs...) =
     emit!(s, :run_progress,
         Dict{String,Any}("state" => state,
-            (String(k) => k === :targets ?
-                          Any[Any[id, String(port)] for (id, port) in v] : v
-             for (k, v) in pairs(kwargs))...), run.origin)
+            (
+                String(k) =>
+                    k === :targets ?
+                    Any[Any[id, String(port)] for (id, port) in v] : v
+                for (k, v) in pairs(kwargs)
+            )...), run.origin)
 
 """
     Loki.cancel!(s::Session) -> Session

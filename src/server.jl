@@ -134,9 +134,13 @@ end
 # silently breaks http://127.0.0.1, never set it risks the cookie in clear.
 overtls(srv::Server, req::HTTP.Request) =
     HTTP.header(req, "X-Forwarded-Proto", "") == "https" ||
-    (srv.public_url !== nothing && startswith(srv.public_url, "https://") &&
-     (HTTP.header(req, "Origin", "") == rstrip(srv.public_url, '/') ||
-      HTTP.header(req, "Host", "") == urlhost(srv.public_url)))
+    (
+        srv.public_url !== nothing && startswith(srv.public_url, "https://") &&
+        (
+            HTTP.header(req, "Origin", "") == rstrip(srv.public_url, '/') ||
+            HTTP.header(req, "Host", "") == urlhost(srv.public_url)
+        )
+    )
 
 function authroute(srv::Server, req::HTTP.Request)
     body = readjson(req)
@@ -195,7 +199,8 @@ jsonresponse(body; status::Integer = 200, headers = Pair{String,String}[]) =
     HTTP.Response(status, [["Content-Type" => JSONTYPE]; headers], JSON3.write(body))
 
 jsonerror(status::Integer, message::AbstractString; extra...) =
-    jsonresponse(Dict{String,Any}("error" => String(message),
+    jsonresponse(
+        Dict{String,Any}("error" => String(message),
             (String(k) => v for (k, v) in pairs(extra))...); status)
 
 function readjson(req::HTTP.Request)
@@ -275,15 +280,18 @@ function graphjson(s::Session; context::AbstractString = "analysis")
         Dict{String,Any}("nodes" => nodes,
             "edges" => Any[edgeevent(e) for e in g.edges],
             "contexts" => Dict{String,Any}(name => contextevent(c)
-                                           for (name, c) in s.contexts),
-            "tables" => Any[merge(tableevent(t), Dict{String,Any}("name" => name))
-                            for (name, t) in sort!(collect(s.tables); by = first)],
+                             for (name, c) in s.contexts),
+            "tables" => Any[
+                merge(tableevent(t), Dict{String,Any}("name" => name))
+                for (name, t) in sort!(collect(s.tables); by = first)
+            ],
             "prelude" => s.usercode.prelude, "nextid" => g.nextid, "seq" => s.seq,
             "context" => String(context),
-            "running" => run === nothing ? nothing :
-                         Dict{String,Any}(
-                "targets" => Any[Any[id, String(p)] for (id, p) in run.targets],
-                "cancelled" => run.cancelled[]))
+            "running" =>
+                run === nothing ? nothing :
+                Dict{String,Any}(
+                    "targets" => Any[Any[id, String(p)] for (id, p) in run.targets],
+                    "cancelled" => run.cancelled[]))
     end
 end
 
@@ -304,13 +312,16 @@ function nodejson(s::Session, node::Node, tainted, ctx, hashes)
         "status" => String(get(s.status, node.id, :idle)),
         "acausal" => any(p -> tainted[(node.id, p)], ports),
         "acausalports" => Dict{String,Any}(String(p) => tainted[(node.id, p)]
-                                           for p in ports),
-        "error" => err === nothing ? nothing :
-                   Dict{String,Any}("node" => err isa NodeError ? err.id : node.id,
-            "message" => sprint(showerror, err)),
-        "inputs" => Any[Dict{String,Any}("name" => String(p.name),
-            "variadic" => p.variadic, "optional" => p.optional)
-                        for p in inputs(kind)],
+                         for p in ports),
+        "error" =>
+            err === nothing ? nothing :
+            Dict{String,Any}("node" => err isa NodeError ? err.id : node.id,
+                "message" => sprint(showerror, err)),
+        "inputs" => Any[
+            Dict{String,Any}("name" => String(p.name),
+                "variadic" => p.variadic, "optional" => p.optional)
+            for p in inputs(kind)
+        ],
         "outputs" => Any[String(p) for p in ports],
         "write" => iswrite(kind), "results" => results,
         "calls" => nodecalls(s.graph, node.id))
@@ -335,8 +346,9 @@ function nodecalls(g::Graph, id::AbstractString)
     ins = Dict{Symbol,Any}()
     for port in inputs(kind)
         fed = Any[callbinding(g, e.from) for e in inedges(g, id) if e.to[2] === port.name]
-        ins[port.name] = port.variadic ? fed :
-                         isempty(fed) ? (port.optional ? nothing : :_) : only(fed)
+        ins[port.name] =
+            port.variadic ? fed :
+            isempty(fed) ? (port.optional ? nothing : :_) : only(fed)
     end
     emitted = try
         emit(kind, node.params, ins)
@@ -352,8 +364,10 @@ function nodecalls(g::Graph, id::AbstractString)
 end
 
 callbinding(g::Graph, from::Tuple{String,Symbol}) =
-    Symbol(length(outputs(nodekind(g.nodes[from[1]].kind))) == 1 ?
-           string("p_", from[1]) : string("p_", from[1], "_", from[2]))
+    Symbol(
+        length(outputs(nodekind(g.nodes[from[1]].kind))) == 1 ?
+        string("p_", from[1]) : string("p_", from[1], "_", from[2]),
+    )
 
 # `p_n2 |> difference(:close_log)` reads as `difference(:close_log)` on a node
 # whose input is already an edge on the canvas.
@@ -373,155 +387,251 @@ function buildrouter(srv::Server)
     HTTP.register!(r, "GET", "/api/graph",
         req -> jsonresponse(graphjson(s; context = contextname(req))))
 
-    HTTP.register!(r, "POST", "/api/nodes", function (req)
-        body = readjson(req)
-        haskey(body, "kind") || throw(ArgumentError("a node needs a kind"))
-        id = addnode!(s, String(body["kind"]),
-            Dict{String,Any}(get(body, "params", Dict{String,Any}()));
-            id = get(body, "id", nothing),
-            position = Tuple(Float64.(get(body, "position", [0.0, 0.0]))))
-        jsonresponse(Dict("id" => id, "node" => nodeevent(getnode(s.graph, id)));
-            status = 201)
-    end)
+    HTTP.register!(
+        r,
+        "POST",
+        "/api/nodes",
+        function (req)
+            body = readjson(req)
+            haskey(body, "kind") || throw(ArgumentError("a node needs a kind"))
+            id = addnode!(s, String(body["kind"]),
+                Dict{String,Any}(get(body, "params", Dict{String,Any}()));
+                id = get(body, "id", nothing),
+                position = Tuple(Float64.(get(body, "position", [0.0, 0.0]))))
+            jsonresponse(Dict("id" => id, "node" => nodeevent(getnode(s.graph, id)));
+                status = 201)
+        end,
+    )
 
-    HTTP.register!(r, "PATCH", "/api/nodes/{id}", function (req)
-        id = needsnode(s, HTTP.getparams(req)["id"])
-        body = readjson(req)
-        # Position and parameters are separate edits: dragging a node must not
-        # invalidate it, and neither must be silently skipped.
-        # PATCH means what it says: the parameters given are merged into the
-        # node's, and a `null` removes one. Sending the whole object instead
-        # would make two quick edits race — the second would be built from a
-        # copy taken before the first landed, and would silently undo it.
-        haskey(body, "params") && updatenode!(s, id,
-            mergeparams(lock(() -> getnode(s.graph, id).params, s.lock),
-                Dict{String,Any}(body["params"])))
-        haskey(body, "position") &&
-            setposition!(s, id, Tuple(Float64.(body["position"])))
-        (haskey(body, "params") || haskey(body, "position")) ||
-            throw(ArgumentError("give params, position, or both"))
-        jsonresponse(Dict("node" => nodeevent(getnode(s.graph, id))))
-    end)
+    HTTP.register!(
+        r,
+        "PATCH",
+        "/api/nodes/{id}",
+        function (req)
+            id = needsnode(s, HTTP.getparams(req)["id"])
+            body = readjson(req)
+            # Position and parameters are separate edits: dragging a node must not
+            # invalidate it, and neither must be silently skipped.
+            # PATCH means what it says: the parameters given are merged into the
+            # node's, and a `null` removes one. Sending the whole object instead
+            # would make two quick edits race — the second would be built from a
+            # copy taken before the first landed, and would silently undo it.
+            haskey(body, "params") && updatenode!(s, id,
+                mergeparams(lock(() -> getnode(s.graph, id).params, s.lock),
+                    Dict{String,Any}(body["params"])))
+            haskey(body, "position") &&
+                setposition!(s, id, Tuple(Float64.(body["position"])))
+            (haskey(body, "params") || haskey(body, "position")) ||
+                throw(ArgumentError("give params, position, or both"))
+            jsonresponse(Dict("node" => nodeevent(getnode(s.graph, id))))
+        end,
+    )
 
-    HTTP.register!(r, "DELETE", "/api/nodes/{id}", function (req)
-        removenode!(s, needsnode(s, HTTP.getparams(req)["id"]))
-        jsonresponse(Dict("ok" => true))
-    end)
+    HTTP.register!(
+        r,
+        "DELETE",
+        "/api/nodes/{id}",
+        function (req)
+            removenode!(s, needsnode(s, HTTP.getparams(req)["id"]))
+            jsonresponse(Dict("ok" => true))
+        end,
+    )
 
-    HTTP.register!(r, "POST", "/api/nodes/{id}/freeze", function (req)
-        id = needsnode(s, HTTP.getparams(req)["id"])
-        body = readjson(req)
-        name = freeze!(s, id; port = get(body, "port", nothing),
-            name = get(body, "name", "frozen_" * id),
-            context = String(get(body, "context", "analysis")))
-        jsonresponse(Dict("table" => name,
-            "rows" => nrow(lock(() -> s.tables[name], s.lock))))
-    end)
+    HTTP.register!(
+        r,
+        "POST",
+        "/api/nodes/{id}/freeze",
+        function (req)
+            id = needsnode(s, HTTP.getparams(req)["id"])
+            body = readjson(req)
+            name = freeze!(s, id; port = get(body, "port", nothing),
+                name = get(body, "name", "frozen_" * id),
+                context = String(get(body, "context", "analysis")))
+            jsonresponse(
+                Dict("table" => name,
+                    "rows" => nrow(lock(() -> s.tables[name], s.lock))),
+            )
+        end,
+    )
 
-    HTTP.register!(r, "POST", "/api/edges", function (req)
-        body = readjson(req)
-        (haskey(body, "from") && haskey(body, "to")) ||
-            throw(ArgumentError("an edge needs from and to"))
-        from, to = body["from"], body["to"]
-        eid = connect!(s, (String(from[1]), Symbol(from[2])),
-            (String(to[1]), Symbol(to[2])); id = get(body, "id", nothing))
-        jsonresponse(Dict("id" => eid); status = 201)
-    end)
+    HTTP.register!(
+        r,
+        "POST",
+        "/api/edges",
+        function (req)
+            body = readjson(req)
+            (haskey(body, "from") && haskey(body, "to")) ||
+                throw(ArgumentError("an edge needs from and to"))
+            from, to = body["from"], body["to"]
+            eid = connect!(s, (String(from[1]), Symbol(from[2])),
+                (String(to[1]), Symbol(to[2])); id = get(body, "id", nothing))
+            jsonresponse(Dict("id" => eid); status = 201)
+        end,
+    )
 
-    HTTP.register!(r, "DELETE", "/api/edges/{id}", function (req)
-        id = HTTP.getparams(req)["id"]
-        lock(s.lock) do
-            any(e -> e.id == id, s.graph.edges) ||
-                throw(NotFound("no edge $(repr(String(id)))"))
-        end
-        disconnect!(s, id)
-        jsonresponse(Dict("ok" => true))
-    end)
+    HTTP.register!(
+        r,
+        "DELETE",
+        "/api/edges/{id}",
+        function (req)
+            id = HTTP.getparams(req)["id"]
+            lock(s.lock) do
+                any(e -> e.id == id, s.graph.edges) ||
+                    throw(NotFound("no edge $(repr(String(id)))"))
+            end
+            disconnect!(s, id)
+            jsonresponse(Dict("ok" => true))
+        end,
+    )
 
     HTTP.register!(r, "GET", "/api/contexts",
-        _ -> jsonresponse(lock(() -> Dict{String,Any}(name => contextevent(c)
-                                                      for (name, c) in s.contexts),
-            s.lock)))
+        _ -> jsonresponse(
+            lock(
+                () -> Dict{String,Any}(name => contextevent(c)
+                    for (name, c) in s.contexts),
+                s.lock),
+        ))
 
-    HTTP.register!(r, "PUT", "/api/contexts/{name}", function (req)
-        name = HTTP.getparams(req)["name"]
-        setcontext!(s, String(name), readcontext(JSON3.read(String(req.body))))
-        jsonresponse(Dict("name" => String(name),
-            "context" => contextevent(s.contexts[String(name)])))
-    end)
+    HTTP.register!(
+        r,
+        "PUT",
+        "/api/contexts/{name}",
+        function (req)
+            name = HTTP.getparams(req)["name"]
+            setcontext!(s, String(name), readcontext(JSON3.read(String(req.body))))
+            jsonresponse(
+                Dict("name" => String(name),
+                    "context" => contextevent(s.contexts[String(name)])),
+            )
+        end,
+    )
 
     HTTP.register!(r, "GET", "/api/tables",
-        _ -> jsonresponse(lock(() -> Any[merge(tableevent(t),
-                Dict{String,Any}("name" => name))
-                                        for (name, t) in
-                                        sort!(collect(s.tables); by = first)], s.lock)))
+        _ -> jsonresponse(
+            lock(
+                () -> Any[
+                    merge(tableevent(t),
+                        Dict{String,Any}("name" => name))
+                    for (name, t) in
+                    sort!(collect(s.tables); by = first)
+                ], s.lock),
+        ))
 
-    HTTP.register!(r, "POST", "/api/tables/{name}", function (req)
-        name = String(HTTP.getparams(req)["name"])
-        format = get(query(req), "format", "csv")
-        addtable!(s, name, readuploadedtable(req.body, format))
-        jsonresponse(Dict("name" => name,
-            "table" => tableevent(lock(() -> s.tables[name], s.lock))); status = 201)
-    end)
+    HTTP.register!(
+        r,
+        "POST",
+        "/api/tables/{name}",
+        function (req)
+            name = String(HTTP.getparams(req)["name"])
+            format = get(query(req), "format", "csv")
+            addtable!(s, name, readuploadedtable(req.body, format))
+            jsonresponse(
+                Dict("name" => name,
+                    "table" => tableevent(lock(() -> s.tables[name], s.lock))); status = 201)
+        end,
+    )
 
-    HTTP.register!(r, "POST", "/api/run", function (req)
-        body = readjson(req)
-        targets = get(body, "targets", nothing)
-        targets === nothing && throw(ArgumentError("a run needs targets"))
-        wanted = [t isa AbstractVector ? (String(t[1]), Symbol(t[2])) : String(t)
-                  for t in targets]
-        context = String(get(body, "context", "analysis"))
-        run = run!(s, wanted; context)
-        jsonresponse(Dict("targets" => Any[Any[id, String(p)] for (id, p) in run.targets],
-            "context" => context))
-    end)
+    HTTP.register!(
+        r,
+        "POST",
+        "/api/run",
+        function (req)
+            body = readjson(req)
+            targets = get(body, "targets", nothing)
+            targets === nothing && throw(ArgumentError("a run needs targets"))
+            wanted = [
+                t isa AbstractVector ? (String(t[1]), Symbol(t[2])) : String(t)
+                for t in targets
+            ]
+            context = String(get(body, "context", "analysis"))
+            run = run!(s, wanted; context)
+            jsonresponse(
+                Dict("targets" => Any[Any[id, String(p)] for (id, p) in run.targets],
+                    "context" => context),
+            )
+        end,
+    )
 
     HTTP.register!(r, "POST", "/api/cancel", function (_)
         cancel!(s)
         jsonresponse(Dict("ok" => true))
     end)
 
-    HTTP.register!(r, "POST", "/api/write/{id}", function (req)
-        id = needsnode(s, HTTP.getparams(req)["id"])
-        write!(s, id; context = String(get(query(req), "context", "analysis")))
-        jsonresponse(Dict("ok" => true, "id" => id))
-    end)
+    HTTP.register!(
+        r,
+        "POST",
+        "/api/write/{id}",
+        function (req)
+            id = needsnode(s, HTTP.getparams(req)["id"])
+            write!(s, id; context = String(get(query(req), "context", "analysis")))
+            jsonresponse(Dict("ok" => true, "id" => id))
+        end,
+    )
 
-    HTTP.register!(r, "GET", "/api/results/{id}/{port}", function (req)
-        frame, _ = needsresult(s, req)
-        jsonresponse(preview(frame; offset = queryint(query(req), "offset", 0),
-            limit = min(queryint(query(req), "limit", 100), 1000),
-            columns = querycolumns(query(req)), key = querykey(query(req))))
-    end)
+    HTTP.register!(
+        r,
+        "GET",
+        "/api/results/{id}/{port}",
+        function (req)
+            frame, _ = needsresult(s, req)
+            jsonresponse(
+                preview(frame; offset = queryint(query(req), "offset", 0),
+                    limit = min(queryint(query(req), "limit", 100), 1000),
+                    columns = querycolumns(query(req)), key = querykey(query(req))),
+            )
+        end,
+    )
 
-    HTTP.register!(r, "GET", "/api/diagnostics/{id}/{port}/{kind}", function (req)
-        frame, node = needsresult(s, req)
-        kind = String(HTTP.getparams(req)["kind"])
-        jsonresponse(diagnostic(frame, kind;
-            params = diagnosticparams(s, node, kind, contextname(req), query(req))))
-    end)
+    HTTP.register!(
+        r,
+        "GET",
+        "/api/diagnostics/{id}/{port}/{kind}",
+        function (req)
+            frame, node = needsresult(s, req)
+            kind = String(HTTP.getparams(req)["kind"])
+            jsonresponse(
+                diagnostic(frame, kind;
+                    params = diagnosticparams(s, node, kind, contextname(req), query(req))),
+            )
+        end,
+    )
 
-    HTTP.register!(r, "GET", "/api/export", function (req)
-        q = query(req)
-        mode = Symbol(get(q, "tables", "argument"))
-        text = exportjulia(s; tables = mode, context = get(q, "context", "analysis"))
-        HTTP.Response(200,
-            ["Content-Type" => "text/x-julia; charset=utf-8",
-                "Content-Disposition" => "attachment; filename=\"analysis.jl\""], text)
-    end)
+    HTTP.register!(
+        r,
+        "GET",
+        "/api/export",
+        function (req)
+            q = query(req)
+            mode = Symbol(get(q, "tables", "argument"))
+            text = exportjulia(s; tables = mode, context = get(q, "context", "analysis"))
+            HTTP.Response(200,
+                ["Content-Type" => "text/x-julia; charset=utf-8",
+                    "Content-Disposition" => "attachment; filename=\"analysis.jl\""], text)
+        end,
+    )
 
-    HTTP.register!(r, "GET", "/api/session", function (req)
-        path = get(query(req), "path", nothing)
-        path === nothing && throw(ArgumentError("saving needs a path"))
-        jsonresponse(Dict("path" => savesession(path, s)))
-    end)
+    HTTP.register!(
+        r,
+        "GET",
+        "/api/session",
+        function (req)
+            path = get(query(req), "path", nothing)
+            path === nothing && throw(ArgumentError("saving needs a path"))
+            jsonresponse(Dict("path" => savesession(path, s)))
+        end,
+    )
 
-    HTTP.register!(r, "POST", "/api/session", function (req)
-        body = readjson(req)
-        haskey(body, "path") || throw(ArgumentError("opening needs a path"))
-        opensession!(s, String(body["path"]))
-        jsonresponse(Dict("path" => String(body["path"]), "seq" => s.seq))
-    end)
+    HTTP.register!(
+        r,
+        "POST",
+        "/api/session",
+        function (req)
+            body = readjson(req)
+            haskey(body, "path") || throw(ArgumentError("opening needs a path"))
+            opensession!(s, String(body["path"]))
+            jsonresponse(Dict("path" => String(body["path"]), "seq" => s.seq))
+        end,
+    )
 
     HTTP.register!(r, "GET", "/api/**", _ -> jsonerror(404, "no such route"))
     return r
@@ -596,8 +706,9 @@ function armaparamdof(node::Node)
     order = get(node.params, "order", nothing)
     order isa AbstractVector && length(order) >= 3 || return nothing
     seasonal = get(node.params, "seasonal_order", nothing)
-    extra = seasonal isa AbstractVector && length(seasonal) >= 4 ?
-            Int(seasonal[1]) + Int(seasonal[3]) : 0
+    extra =
+        seasonal isa AbstractVector && length(seasonal) >= 4 ?
+        Int(seasonal[1]) + Int(seasonal[3]) : 0
     return Int(order[1]) + Int(order[3]) + extra
 end
 
@@ -607,11 +718,13 @@ function nodekindjson(name::AbstractString)
     k = nodekind(name)
     return Dict{String,Any}("name" => String(name), "category" => categoryof(k),
         "doc" => docof(k),
-        "inputs" => Any[Dict{String,Any}("name" => String(p.name),
-            "variadic" => p.variadic, "optional" => p.optional) for p in inputs(k)],
+        "inputs" => Any[
+            Dict{String,Any}("name" => String(p.name),
+                "variadic" => p.variadic, "optional" => p.optional) for p in inputs(k)
+        ],
         "outputs" => Any[String(p) for p in outputs(k)],
         "acausal" => Any[String(p) for p in outputs(k)
-                         if isacausal(k, Dict{String,Any}(), p)],
+                          if isacausal(k, Dict{String,Any}(), p)],
         "write" => iswrite(k), "canemit" => canemit(k),
         "paramschema" => paramschema(k),
         # A JSON object has no order, and a form in declaration order reads very
@@ -622,7 +735,7 @@ end
 
 paramorder(k::OpKind) = Any[p.name for p in k.params]
 paramorder(k::NodeKind) = Any[String(n)
-                              for n in keys(get(paramschema(k), "properties", Dict()))]
+    for n in keys(get(paramschema(k), "properties", Dict()))]
 
 categoryof(k::OpKind) = k.category
 categoryof(::NodeKind) = "other"
@@ -643,8 +756,10 @@ function readuploadedtable(body::AbstractVector{UInt8}, format::AbstractString)
     reader = format == "csv" ? "read_csv_auto" : "read_parquet"
     db = DuckDB.DB()
     try
-        return DataFrame(DuckDB.DBInterface.execute(db,
-            "SELECT * FROM $reader('$(replace(path, "\'" => "\'\'"))')"))
+        return DataFrame(
+            DuckDB.DBInterface.execute(db,
+                "SELECT * FROM $reader('$(replace(path, "\'" => "\'\'"))')"),
+        )
     catch err
         err isa InterruptException && rethrow()
         throw(ArgumentError("could not read the uploaded $format: \
@@ -658,11 +773,13 @@ end
 # --- the static bundle ---------------------------------------------------------
 
 const CONTENTTYPES = Dict(".html" => "text/html; charset=utf-8",
-    ".js" => "text/javascript; charset=utf-8", ".mjs" => "text/javascript; charset=utf-8",
+    ".js" => "text/javascript; charset=utf-8",
+    ".mjs" => "text/javascript; charset=utf-8",
     ".css" => "text/css; charset=utf-8", ".json" => "application/json; charset=utf-8",
     ".map" => "application/json; charset=utf-8", ".svg" => "image/svg+xml",
     ".png" => "image/png", ".jpg" => "image/jpeg", ".webp" => "image/webp",
-    ".ico" => "image/x-icon", ".woff2" => "font/woff2", ".txt" => "text/plain; charset=utf-8")
+    ".ico" => "image/x-icon", ".woff2" => "font/woff2",
+    ".txt" => "text/plain; charset=utf-8")
 
 contenttype(path) = get(CONTENTTYPES, lowercase(last(splitext(path))),
     "application/octet-stream")
@@ -698,7 +815,8 @@ function bundlepath(root::AbstractString, path::AbstractString)
     rel = lstrip(HTTP.URIs.unescapeuri(path), '/')
     isempty(rel) && (rel = "index.html")
     full = normpath(joinpath(root, rel))
-    startswith(full, root * (endswith(root, "/") ? "" : "/")) || full == root || return nothing
+    startswith(full, root * (endswith(root, "/") ? "" : "/")) || full == root ||
+        return nothing
     return full
 end
 
@@ -718,8 +836,9 @@ function staticresponse(srv::Server, path::AbstractString)
     # forever. `index.html` points at this build's hashes and must not be: with
     # no validator to revalidate against, `no-cache` still lets a browser reuse
     # it, and a stale index means a stale app against a fresh server.
-    cache = startswith(path, "/assets/") ? "public, max-age=31536000, immutable" :
-            "no-store"
+    cache =
+        startswith(path, "/assets/") ? "public, max-age=31536000, immutable" :
+        "no-store"
     return HTTP.Response(200,
         ["Content-Type" => contenttype(full), "Cache-Control" => cache], read(full))
 end
@@ -788,8 +907,11 @@ function serveesocket(srv::Server, ws)
     sub = subscribe!(s)
     # The client learns where the sequence stands, so a reconnect knows whether
     # what it has is current.
-    offer!(sub, Event(:hello, :ui, lock(() -> s.seq, s.lock), time(),
-        Dict{String,Any}("seq" => lock(() -> s.seq, s.lock))))
+    offer!(
+        sub,
+        Event(:hello, :ui, lock(() -> s.seq, s.lock), time(),
+            Dict{String,Any}("seq" => lock(() -> s.seq, s.lock))),
+    )
     # Through the subscriber, not a second sender: iOS and proxies drop an idle
     # socket, and nothing else here is periodic.
     beat = Timer(HEARTBEATSECONDS; interval = HEARTBEATSECONDS) do _
@@ -827,8 +949,10 @@ function socketwriter(ws, sub::Subscriber)
                 dropped = sub.dropped
                 sub.dropped = 0
                 HTTP.WebSockets.send(ws,
-                    JSON3.write(Dict{String,Any}("event" => "desync",
-                        "payload" => Dict{String,Any}("dropped" => dropped))))
+                    JSON3.write(
+                        Dict{String,Any}("event" => "desync",
+                            "payload" => Dict{String,Any}("dropped" => dropped)),
+                    ))
             end
             HTTP.WebSockets.send(ws, JSON3.write(eventjson(e)))
         end
@@ -968,8 +1092,11 @@ function announce(srv::Server)
     srv.public_url === nothing ||
         push!(lines, "and, through tailscale serve, on $(weburl(srv; public = true))")
     isdir(srv.root) ||
-        push!(lines, "The browser bundle has not been built; the API is up. \
-            Build it with: cd web && npm ci && npm run build")
+        push!(
+            lines,
+            "The browser bundle has not been built; the API is up. \
+            Build it with: cd web && npm ci && npm run build",
+        )
     @info join(lines, "\n")
     return nothing
 end

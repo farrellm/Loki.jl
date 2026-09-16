@@ -32,18 +32,21 @@ end
     @testset "every mutation is broadcast" begin
         s = eventsession()
         local src, sm
-        seen, _ = recorded(s, () -> begin
-            src = Loki.addnode!(s, "table", Dict("table" => "df"))
-            sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 5))
-            edge = Loki.connect!(s, (src, :out), (sm, :in))
-            Loki.setposition!(s, sm, (40, 90))
-            Loki.updatenode!(s, sm, Dict("column" => "x", "span" => 7))
-            Loki.setcontext!(s, "preview", Context(0, 11))
-            Loki.setprelude!(s, "helper(x) = x + 1")
-            Loki.addtable!(s, "other", DataFrame(time = 1:3, y = [1.0, 2.0, 3.0]))
-            Loki.disconnect!(s, edge)
-            Loki.removenode!(s, sm)
-        end)
+        seen, _ = recorded(
+            s,
+            () -> begin
+                src = Loki.addnode!(s, "table", Dict("table" => "df"))
+                sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 5))
+                edge = Loki.connect!(s, (src, :out), (sm, :in))
+                Loki.setposition!(s, sm, (40, 90))
+                Loki.updatenode!(s, sm, Dict("column" => "x", "span" => 7))
+                Loki.setcontext!(s, "preview", Context(0, 11))
+                Loki.setprelude!(s, "helper(x) = x + 1")
+                Loki.addtable!(s, "other", DataFrame(time = 1:3, y = [1.0, 2.0, 3.0]))
+                Loki.disconnect!(s, edge)
+                Loki.removenode!(s, sm)
+            end,
+        )
         @test changes(seen) == ["addnode", "addnode", "connect", "position",
             "updatenode", "setcontext", "setprelude", "addtable", "disconnect",
             "removenode"]
@@ -71,12 +74,15 @@ end
     @testset "a run reports its progress and results" begin
         s = eventsession()
         local sm
-        seen, _ = recorded(s, () -> begin
-            src = Loki.addnode!(s, "table", Dict("table" => "df"))
-            sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 5))
-            Loki.connect!(s, (src, :out), (sm, :in))
-            wait(Loki.run!(s, [sm]))
-        end)
+        seen, _ = recorded(
+            s,
+            () -> begin
+                src = Loki.addnode!(s, "table", Dict("table" => "df"))
+                sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 5))
+                Loki.connect!(s, (src, :out), (sm, :in))
+                wait(Loki.run!(s, [sm]))
+            end,
+        )
         states = [e.payload["state"] for e in ofkind(seen, :run_progress)]
         @test first(states) == "started" && last(states) == "done"
         statuses = [e.payload["status"] for e in ofkind(seen, :node_status)]
@@ -90,35 +96,45 @@ end
 
     @testset "a failing node is reported where it failed" begin
         s = eventsession()
-        seen, _ = recorded(s, () -> begin
-            src = Loki.addnode!(s, "table", Dict("table" => "df"))
-            bad = Loki.addnode!(s, "addcolumns", Dict("function" => "r -> error(\"boom\")"))
-            down = Loki.addnode!(s, "head", Dict("n" => 3))
-            Loki.connect!(s, (src, :out), (bad, :in))
-            Loki.connect!(s, (bad, :out), (down, :in))
-            wait(Loki.run!(s, [down]))
-        end)
+        seen, _ = recorded(
+            s,
+            () -> begin
+                src = Loki.addnode!(s, "table", Dict("table" => "df"))
+                bad = Loki.addnode!(
+                    s,
+                    "addcolumns",
+                    Dict("function" => "r -> error(\"boom\")"),
+                )
+                down = Loki.addnode!(s, "head", Dict("n" => 3))
+                Loki.connect!(s, (src, :out), (bad, :in))
+                Loki.connect!(s, (bad, :out), (down, :in))
+                wait(Loki.run!(s, [down]))
+            end,
+        )
         statuses = Dict(e.payload["id"] => e.payload["status"]
-                        for e in ofkind(seen, :node_status))
+             for e in ofkind(seen, :node_status))
         @test count(==("error"), values(statuses)) == 1
         @test count(==("blocked"), values(statuses)) >= 1
         failed = only(e for e in ofkind(seen, :node_status)
-                      if e.payload["status"] == "error")
+                   if e.payload["status"] == "error")
         @test occursin("boom", failed.payload["error"]["message"])
     end
 
     @testset "origin travels, including into the run's worker" begin
         s = eventsession()
-        seen, _ = recorded(s, () -> begin
-            src = Loki.withorigin(:mcp) do
-                Loki.addnode!(s, "table", Dict("table" => "df"))
-            end
-            Loki.withorigin(:ui) do
-                sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 3))
-                Loki.connect!(s, (src, :out), (sm, :in))
-                wait(Loki.run!(s, [sm]))
-            end
-        end)
+        seen, _ = recorded(
+            s,
+            () -> begin
+                src = Loki.withorigin(:mcp) do
+                    Loki.addnode!(s, "table", Dict("table" => "df"))
+                end
+                Loki.withorigin(:ui) do
+                    sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 3))
+                    Loki.connect!(s, (src, :out), (sm, :in))
+                    wait(Loki.run!(s, [sm]))
+                end
+            end,
+        )
         @test first(seen).origin === :mcp
         # The worker outlives the request that started it; the run carries the
         # origin so its results are still attributed to whoever asked.
@@ -188,12 +204,15 @@ end
 
     @testset "events serialize" begin
         s = eventsession()
-        seen, _ = recorded(s, () -> begin
-            src = Loki.addnode!(s, "table", Dict("table" => "df"))
-            sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 5))
-            Loki.connect!(s, (src, :out), (sm, :in))
-            wait(Loki.run!(s, [sm]))
-        end)
+        seen, _ = recorded(
+            s,
+            () -> begin
+                src = Loki.addnode!(s, "table", Dict("table" => "df"))
+                sm = Loki.addnode!(s, "ema", Dict("column" => "x", "span" => 5))
+                Loki.connect!(s, (src, :out), (sm, :in))
+                wait(Loki.run!(s, [sm]))
+            end,
+        )
         for e in seen
             doc = JSON3.read(JSON3.write(Loki.eventjson(e)))
             @test doc.event == String(e.kind)

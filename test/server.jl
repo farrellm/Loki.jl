@@ -43,14 +43,20 @@ asjson(r) = JSON3.read(String(r.body))
 
 # Build the table -> ema chain the other tests run against.
 function buildchain(ctx)
-    n1 = asjson(ask(ctx, "POST", "/api/nodes";
-        body = Dict("kind" => "table", "params" => Dict("table" => "df")))).id
-    n2 = asjson(ask(ctx, "POST", "/api/nodes";
-        body = Dict("kind" => "ema",
-            "params" => Dict("column" => "x", "span" => 5),
-            "position" => [40, 90]))).id
-    e = asjson(ask(ctx, "POST", "/api/edges";
-        body = Dict("from" => [n1, "out"], "to" => [n2, "in"]))).id
+    n1 = asjson(
+        ask(ctx, "POST", "/api/nodes";
+            body = Dict("kind" => "table", "params" => Dict("table" => "df"))),
+    ).id
+    n2 = asjson(
+        ask(ctx, "POST", "/api/nodes";
+            body = Dict("kind" => "ema",
+                "params" => Dict("column" => "x", "span" => 5),
+                "position" => [40, 90])),
+    ).id
+    e = asjson(
+        ask(ctx, "POST", "/api/edges";
+            body = Dict("from" => [n1, "out"], "to" => [n2, "in"])),
+    ).id
     return String(n1), String(n2), String(e)
 end
 
@@ -73,7 +79,7 @@ end
             # No credential, and a wrong one, are both refused.
             @test ask(ctx, "GET", "/api/graph"; token = nothing).status == 401
             @test ask(ctx, "GET", "/api/graph"; token = "0"^64).status == 401
-            @test ask(ctx, "GET", "/api/graph"; token = ctx.token[1:end-1]).status == 401
+            @test ask(ctx, "GET", "/api/graph"; token = ctx.token[1:(end-1)]).status == 401
 
             # A bearer header and a query parameter both work: curl, the tests and
             # an MCP client cannot use a cookie.
@@ -206,20 +212,21 @@ end
             @test ask(ctx, "PATCH", "/api/nodes/$n2";
                 body = Dict("params" => Dict("name" => "smooth"))).status == 200
             merged = only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
-                          if n.id == n2)
+                       if n.id == n2)
             @test merged.params.column == "x"
             @test merged.params.span == 9
             @test merged.params.name == "smooth"
             # `null` removes one.
             @test ask(ctx, "PATCH", "/api/nodes/$n2";
                 body = Dict("params" => Dict("name" => nothing))).status == 200
-            @test !haskey(only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
-                               if n.id == n2).params, :name)
+            @test !haskey(
+                only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
+                           if n.id == n2).params, :name)
             @test ask(ctx, "PATCH", "/api/nodes/$n2";
                 body = Dict("position" => [7, 8])).status == 200
             @test ask(ctx, "PATCH", "/api/nodes/$n2"; body = Dict()).status == 400
             moved = only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
-                         if n.id == n2)
+                       if n.id == n2)
             @test moved.position == [7, 8]
             @test moved.params.span == 9
 
@@ -253,7 +260,7 @@ end
             # Moving a node does not throw its result away.
             ask(ctx, "PATCH", "/api/nodes/$n2"; body = Dict("position" => [1, 1]))
             still = only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
-                         if n.id == n2)
+                       if n.id == n2)
             @test still.status == "ok"
             @test still.results.out.rows == 80
 
@@ -261,7 +268,7 @@ end
             ask(ctx, "PATCH", "/api/nodes/$n2";
                 body = Dict("params" => Dict("column" => "x", "span" => 3)))
             stale = only(n for n in asjson(ask(ctx, "GET", "/api/graph")).nodes
-                         if n.id == n2)
+                       if n.id == n2)
             @test stale.status == "idle"
             @test isempty(stale.results)
 
@@ -274,10 +281,18 @@ end
             @test "pin" in [String(t.name) for t in asjson(ask(ctx, "GET", "/api/tables"))]
 
             path = joinpath(mktempdir(), "out.csv")
-            w = asjson(ask(ctx, "POST", "/api/nodes";
-                body = Dict("kind" => "writecsv", "params" => Dict("path" => path)))).id
-            ask(ctx, "POST", "/api/edges"; body = Dict("from" => [n1, "out"],
-                "to" => [String(w), "in"]))
+            w = asjson(
+                ask(ctx, "POST", "/api/nodes";
+                    body = Dict("kind" => "writecsv", "params" => Dict("path" => path)),
+                ),
+            ).id
+            ask(
+                ctx,
+                "POST",
+                "/api/edges";
+                body = Dict("from" => [n1, "out"],
+                    "to" => [String(w), "in"]),
+            )
             # Watching a write node must not write; only an explicit write does.
             runtoready(ctx, [String(w)])
             @test !isfile(path)
@@ -290,9 +305,11 @@ end
     @testset "a failing node is reported where it failed" begin
         withserver() do ctx
             n1, _, _ = buildchain(ctx)
-            bad = asjson(ask(ctx, "POST", "/api/nodes";
-                body = Dict("kind" => "addcolumns",
-                    "params" => Dict("function" => "r -> error(\"boom\")")))).id
+            bad = asjson(
+                ask(ctx, "POST", "/api/nodes";
+                    body = Dict("kind" => "addcolumns",
+                        "params" => Dict("function" => "r -> error(\"boom\")"))),
+            ).id
             ask(ctx, "POST", "/api/edges";
                 body = Dict("from" => [n1, "out"], "to" => [String(bad), "in"]))
             g = runtoready(ctx, [String(bad)])
@@ -352,8 +369,10 @@ end
             @test page.data.total == 80
             @test page.data.rows[1][1] == 3
             # The page size is capped, so one request cannot ask for a million rows.
-            @test length(asjson(ask(ctx, "GET",
-                "/api/results/$n2/out?limit=99999")).data.rows) <= 1000
+            @test length(
+                asjson(ask(ctx, "GET",
+                    "/api/results/$n2/out?limit=99999")).data.rows,
+            ) <= 1000
             keyed = asjson(ask(ctx, "GET", "/api/results/$n2/out?key=k%3Da&limit=500"))
             @test keyed.data.total == 40
             narrow = asjson(ask(ctx, "GET", "/api/results/$n2/out?columns=time,x_ema_5"))
@@ -364,8 +383,10 @@ end
             @test acf.kind == "acf"
             @test acf.summary.lags == 10
             @test length(acf.data.values) == 11
-            series = asjson(ask(ctx, "GET",
-                "/api/diagnostics/$n2/out/series?columns=x,x_ema_5&maxpoints=20"))
+            series = asjson(
+                ask(ctx, "GET",
+                    "/api/diagnostics/$n2/out/series?columns=x,x_ema_5&maxpoints=20"),
+            )
             @test length(series.data.series) == 2
             @test series.data.series[1].downsampled == true
 
@@ -390,12 +411,16 @@ end
         s = Loki.Session(; tables = (df = DataFrame(time = 1:240, y = y),),
             contexts = (analysis = Context(0, 241), train = Context(0, 121)))
         withserver(; session = s) do ctx
-            n1 = asjson(ask(ctx, "POST", "/api/nodes";
-                body = Dict("kind" => "table", "params" => Dict("table" => "df")))).id
-            fit = asjson(ask(ctx, "POST", "/api/nodes";
-                body = Dict("kind" => "fit",
-                    "params" => Dict("family" => "arma", "column" => "y",
-                        "order" => [2, 0, 1], "fitcontext" => "train")))).id
+            n1 = asjson(
+                ask(ctx, "POST", "/api/nodes";
+                    body = Dict("kind" => "table", "params" => Dict("table" => "df"))),
+            ).id
+            fit = asjson(
+                ask(ctx, "POST", "/api/nodes";
+                    body = Dict("kind" => "fit",
+                        "params" => Dict("family" => "arma", "column" => "y",
+                            "order" => [2, 0, 1], "fitcontext" => "train"))),
+            ).id
             ask(ctx, "POST", "/api/edges";
                 body = Dict("from" => [n1, "out"], "to" => [fit, "in"]))
             g = runtoready(ctx, [String(fit)])
@@ -414,8 +439,10 @@ end
             @test sort(collect(String.(keys(panel.panels)))) ==
                   ["acf", "fitted", "histogram", "ljungbox", "pacf", "qqplot", "series"]
             # An explicit dof still wins.
-            @test asjson(ask(ctx, "GET",
-                "/api/diagnostics/$fit/insample/residuals?column=y&dof=5")).summary.dof ==
+            @test asjson(
+                ask(ctx, "GET",
+                    "/api/diagnostics/$fit/insample/residuals?column=y&dof=5"),
+            ).summary.dof ==
                   5
 
             report = asjson(ask(ctx, "GET", "/api/diagnostics/$fit/model/fit"))
@@ -425,8 +452,10 @@ end
             # The fan is asked for on the port that has the series; the route
             # supplies the models from the `model` port beside it, because
             # `applyarma` dropped that column on the way through.
-            fan = asjson(ask(ctx, "GET",
-                "/api/diagnostics/$fit/insample/forecast?column=y&h=4"))
+            fan = asjson(
+                ask(ctx, "GET",
+                    "/api/diagnostics/$fit/insample/forecast?column=y&h=4"),
+            )
             @test fan.summary.h == 4
             @test length(fan.data.mean) == 4
             @test isempty(fan.warnings)
@@ -534,9 +563,11 @@ end
                 end
                 sleep(0.3)
             end
-            added = only(e for e in events(got)
-                         if String(e.event) == "graph_changed" &&
-                            String(e.payload.change) == "addnode")
+            added = only(
+                e for e in events(got)
+                if String(e.event) == "graph_changed" &&
+                    String(e.payload.change) == "addnode"
+            )
             @test String(added.origin) == "mcp"
         end
     end

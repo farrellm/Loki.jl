@@ -18,8 +18,9 @@ const DIAGCTX = Context(0, 101)
 # compares them by identity. Compare what they hold instead.
 samediagnostic(a::Loki.DiagnosticResult, b::Loki.DiagnosticResult) =
     a.kind === b.kind && isequal(a.data, b.data) && isequal(a.summary, b.summary) &&
-    a.warnings == b.warnings && sort(collect(keys(a.panels))) ==
-                                sort(collect(keys(b.panels)))
+    a.warnings == b.warnings &&
+    sort(collect(keys(a.panels))) ==
+    sort(collect(keys(b.panels)))
 
 # The same rows as one chunk and as several, so a diagnostic can be run over both.
 function diagframes(df::DataFrame; breaks = (17, 40, 88))
@@ -52,7 +53,7 @@ end
         @test isequal(Loki.columnvectors(chunked, :time, :x), cols)
 
         a = Loki.columnvectors(whole, :time; key = :k => "a")
-        @test a.time == df.time[df.k.=="a"]
+        @test a.time == df.time[df.k .== "a"]
         # A key arriving from a query string is a string whatever the column holds.
         @test Loki.columnvectors(whole, :time; key = :time => "5").time == [5]
         @test_throws ArgumentError Loki.columnvectors(whole, :nope)
@@ -272,8 +273,10 @@ end
             @test any(w -> occursin("not evenly spaced", w), r.warnings)
             @test r.summary["suggestion"] == "intervalize(clock(1), Last(:y))"
         end
-        @test isempty(filter(w -> occursin("evenly spaced", w),
-            acf(whole, :y; lags = 3).warnings))
+        @test isempty(
+            filter(w -> occursin("evenly spaced", w),
+                acf(whole, :y; lags = 3).warnings),
+        )
     end
 
     @testset "adftest" begin
@@ -409,8 +412,10 @@ end
         # no observation at all is the reliable way to get one: too few rows is
         # not, since StateSpaceModels will happily fit three.
         blank = load(Context(0, 6),
-            readtable(DataFrame(time = 1:5,
-                y = Vector{Union{Missing,Float64}}(missing, 5))) |>
+            readtable(
+                DataFrame(time = 1:5,
+                    y = Vector{Union{Missing,Float64}}(missing, 5)),
+            ) |>
             fitarma(:y; order = (1, 0, 0)))
         f = fitreport(blank)
         @test f.summary["status"] == "failed"
@@ -435,9 +440,12 @@ end
         narrow, wide = r.data["intervals"][1], r.data["intervals"][2]
         @test all(wide["lower"] .<= narrow["lower"])
         @test all(wide["upper"] .>= narrow["upper"])
-        @test r.data["intervals"][2]["upper"][1] ≈ r.data["mean"][1] +
-                                                   1.959963984540054 * r.summary["sd"][1] rtol = 1e-9
-        @test length(forecastfan(insample, :y; models, h = 6, history = 20).data["history"]["values"]) ==
+        @test r.data["intervals"][2]["upper"][1] ≈
+              r.data["mean"][1] +
+              1.959963984540054 * r.summary["sd"][1] rtol = 1e-9
+        @test length(
+            forecastfan(insample, :y; models, h = 6, history = 20).data["history"]["values"],
+        ) ==
               20
 
         # Without a model there is nothing to forecast, and it says which port has one.
@@ -497,20 +505,24 @@ end
         lb = Loki.diagnostic(insample, "ljungbox";
             params = Dict("column" => "y_residual", "lags" => "10,20", "dof" => "2"))
         @test sort(collect(keys(lb.summary["pvalues"]))) == ["10", "20"]
-        @test length(Loki.diagnostic(insample, "series";
-            params = Dict("columns" => "y,y_fitted")).data["series"]) == 2
+        @test length(
+            Loki.diagnostic(insample, "series";
+                params = Dict("columns"=>"y,y_fitted")).data["series"],
+        ) == 2
         @test Loki.diagnostic(insample, "preview";
-            params = Dict("offset" => "3", "limit" => "2")).data["total"] == 240
+            params = Dict("offset"=>"3", "limit"=>"2")).data["total"] == 240
         @test Loki.diagnostic(models, "fit"; params = Dict()).summary["order"] == [1, 0, 1]
         @test Loki.diagnostic(insample, "forecast";
-            params = Dict("column" => "y", "h" => "4", "models" => models,
-                "levels" => "0.5,0.9")).summary["levels"] == [0.5, 0.9]
+            params = Dict("column"=>"y", "h"=>"4", "models"=>models,
+                "levels"=>"0.5,0.9")).summary["levels"] == [0.5, 0.9]
 
         keyed = load(Context(0, 21),
-            readtable(DataFrame(time = 1:20, k = repeat(["a", "b"], 10),
-                y = Float64.(1:20))))
+            readtable(
+                DataFrame(time = 1:20, k = repeat(["a", "b"], 10),
+                    y = Float64.(1:20)),
+            ))
         @test Loki.diagnostic(keyed, "preview";
-            params = Dict("key" => "k=a", "limit" => "50")).data["total"] == 10
+            params = Dict("key"=>"k=a", "limit"=>"50")).data["total"] == 10
 
         @test_throws ArgumentError Loki.diagnostic(insample, "nope")
         @test_throws ArgumentError Loki.diagnostic(insample, "acf")
