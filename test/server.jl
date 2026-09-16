@@ -351,6 +351,134 @@ end
         end
     end
 
+    # Collect what a socket receives while `body()` runs. The socket task is
+    # always joined, so a test never leaves one behind for Aqua to find.
+    function withsocket(body, ctx; token = ctx.token, headers = Pair{String,String}[],
+        settle = 0.6)
+        got = String[]
+        opened = Threads.Event()
+        url = "ws://127.0.0.1:$(ctx.port)/ws" * (token === nothing ? "" : "?token=$token")
+        sock = Threads.@spawn try
+            HTTP.WebSockets.open(url; headers) do ws
+                notify(opened)
+                for msg in ws
+                    push!(got, msg isa AbstractString ? String(msg) : String(copy(msg)))
+                end
+            end
+        catch
+            notify(opened)
+        end
+        wait(opened)
+        sleep(0.2)
+        try
+            body(got)
+        finally
+            sleep(settle)
+            Loki.stop!(ctx.s)
+            try
+                wait(sock)
+            catch
+            end
+        end
+        return got
+    end
+
+    events(got) = [JSON3.read(g) for g in got]
+    kinds(got) = [String(e.event) for e in events(got)]
+
+    @testset "the websocket carries every change" begin
+        withserver() do ctx
+            got = withsocket(ctx) do _
+                n1, n2, _ = buildchain(ctx)
+                runtoready(ctx, [n2])
+            end
+            es = events(got)
+            @test first(kinds(got)) == "hello"
+            @test first(es).payload.seq isa Integer
+            # The sequence is monotonic, so a client can tell it missed nothing.
+            numbered = [e.seq for e in es if String(e.event) != "heartbeat"]
+            @test issorted(numbered)
+            @test "graph_changed" in kinds(got)
+            @test "node_status" in kinds(got)
+            @test "result_ready" in kinds(got)
+            @test "run_progress" in kinds(got)
+            ready = only(e for e in es if String(e.event) == "result_ready")
+            @test ready.payload.rows == 80
+            # An edit made over HTTP is attributed to the browser.
+            @test all(e -> String(e.origin) == "ui",
+                [e for e in es if String(e.event) == "graph_changed"])
+        end
+    end
+
+    @testset "an edit from the REPL reaches a browser, with its origin" begin
+        withserver() do ctx
+            got = withsocket(ctx) do _
+                Loki.withorigin(:mcp) do
+                    Loki.addnode!(ctx.s, "emptyframe", Dict())
+                end
+                sleep(0.3)
+            end
+            added = only(e for e in events(got)
+                         if String(e.event) == "graph_changed" &&
+                            String(e.payload.change) == "addnode")
+            @test String(added.origin) == "mcp"
+        end
+    end
+
+    @testset "a ping is answered" begin
+        withserver() do ctx
+            got = String[]
+            opened = Threads.Event()
+            sock = Threads.@spawn HTTP.WebSockets.open(
+                "ws://127.0.0.1:$(ctx.port)/ws?token=$(ctx.token)") do ws
+                notify(opened)
+                HTTP.WebSockets.send(ws, JSON3.write(Dict("type" => "ping")))
+                for msg in ws
+                    push!(got, String(msg))
+                    any(g -> occursin("pong", g), got) && break
+                end
+            end
+            wait(opened)
+            sleep(0.8)
+            Loki.stop!(ctx.s)
+            try
+                wait(sock)
+            catch
+            end
+            @test any(g -> JSON3.read(g).event == "pong", got)
+        end
+    end
+
+    @testset "the upgrade is refused without a token or from a foreign origin" begin
+        withserver() do ctx
+            for (label, token, headers) in
+                (("no token", nothing, Pair{String,String}[]),
+                ("wrong token", "0"^64, Pair{String,String}[]),
+                ("foreign origin", ctx.token, ["Origin" => "http://evil.example"]),
+                ("foreign host", ctx.token, ["Host" => "evil.example"]))
+
+                refused = try
+                    HTTP.WebSockets.open(_ -> nothing,
+                        "ws://127.0.0.1:$(ctx.port)/ws" *
+                        (token === nothing ? "" : "?token=$token"); headers)
+                    false
+                catch
+                    true
+                end
+                @test refused || label == ""
+            end
+            # ... and still accepted with one.
+            ok = try
+                HTTP.WebSockets.open(ws -> nothing,
+                    "ws://127.0.0.1:$(ctx.port)/ws?token=$(ctx.token)")
+                true
+            catch
+                false
+            end
+            @test ok
+        end
+    end
+
     @testset "serving twice, and stopping" begin
         s = serversession()
         Loki.serve(s; port = 0, open_browser = false)

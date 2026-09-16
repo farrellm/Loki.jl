@@ -23,7 +23,10 @@ mutable struct Server
     const token::String
     const public_url::Union{Nothing,String}
     const root::String
-    const sockets::Vector{Task}
+    # The live WebSockets. `Base.close(::HTTP.Server)` waits for active
+    # connections to finish, and a socket's reader never finishes one, so
+    # stopping has to end them itself.
+    const sockets::Vector{Any}
     const lock::ReentrantLock
     http::Any                     # HTTP.Server, once it is listening
     port::Int
@@ -651,9 +654,101 @@ end
 
 function servestream(srv::Server, stream::HTTP.Stream)
     req = stream.message
+    if HTTP.WebSockets.isupgrade(req)
+        # Checked before the upgrade: a socket refused at the handshake never
+        # becomes a subscriber.
+        checkorigin(srv, req) || return writeresponse(stream,
+            jsonerror(403, "forbidden origin"))
+        checkhost(srv, req) || return writeresponse(stream,
+            jsonerror(403, "forbidden host"))
+        authorized(srv, req) || return writeresponse(stream,
+            jsonerror(401, "unauthorized"))
+        return HTTP.WebSockets.upgrade(ws -> serveesocket(srv, ws), stream)
+    end
     req.body = read(stream)
     HTTP.closeread(stream)
     return writeresponse(stream, handlerequest(srv, req))
+end
+
+# --- the WebSocket ----------------------------------------------------------------
+#
+# Two tasks per socket, because `receive` blocks and Julia has no `select`: this
+# one reads, and a writer drains the subscriber. Exactly one of them ever sends,
+# so the heartbeat and the reply to a ping are offered into the subscriber's own
+# queue rather than written from a second task.
+
+const HEARTBEATSECONDS = 30
+
+function serveesocket(srv::Server, ws)
+    s = srv.session
+    sub = subscribe!(s)
+    # The client learns where the sequence stands, so a reconnect knows whether
+    # what it has is current.
+    offer!(sub, Event(:hello, :ui, lock(() -> s.seq, s.lock), time(),
+        Dict{String,Any}("seq" => lock(() -> s.seq, s.lock))))
+    # Through the subscriber, not a second sender: iOS and proxies drop an idle
+    # socket, and nothing else here is periodic.
+    beat = Timer(HEARTBEATSECONDS; interval = HEARTBEATSECONDS) do _
+        offer!(sub, Event(:heartbeat, :ui, 0, time(), Dict{String,Any}()))
+    end
+    writer = Threads.@spawn socketwriter(ws, sub)
+    lock(() -> push!(srv.sockets, ws), srv.lock)
+    try
+        for msg in ws
+            handlesocketmessage(sub, msg)
+        end
+    catch err
+        err isa InterruptException && rethrow()
+        # A socket that goes away without closing is the normal case on a phone.
+        @debug "Loki websocket ended" exception = err
+    finally
+        close(beat)
+        lock(() -> filter!(x -> x !== ws, srv.sockets), srv.lock)
+        unsubscribe!(s, sub)
+        try
+            wait(writer)
+        catch
+        end
+    end
+    return nothing
+end
+
+function socketwriter(ws, sub::Subscriber)
+    try
+        for e in sub
+            if sub.dropped > 0
+                # The queue overflowed, so `seq` has a gap. Say so explicitly
+                # rather than leave the client to infer it: it refetches
+                # `/api/graph` and carries on.
+                dropped = sub.dropped
+                sub.dropped = 0
+                HTTP.WebSockets.send(ws,
+                    JSON3.write(Dict{String,Any}("event" => "desync",
+                        "payload" => Dict{String,Any}("dropped" => dropped))))
+            end
+            HTTP.WebSockets.send(ws, JSON3.write(eventjson(e)))
+        end
+    catch err
+        err isa InterruptException && rethrow()
+        @debug "Loki websocket writer ended" exception = err
+    end
+    return nothing
+end
+
+# The client sends almost nothing: it edits over the REST API, so that every
+# change is checked in one place. A ping is the exception, so a proxy sees
+# traffic in both directions.
+function handlesocketmessage(sub::Subscriber, msg)
+    text = msg isa AbstractString ? String(msg) : String(copy(msg))
+    doc = try
+        JSON3.read(text)
+    catch err
+        err isa InterruptException && rethrow()
+        return nothing
+    end
+    doc isa JSON3.Object && get(doc, :type, nothing) == "ping" &&
+        offer!(sub, Event(:pong, :ui, 0, time(), Dict{String,Any}()))
+    return nothing
 end
 
 # --- starting and stopping ---------------------------------------------------------
@@ -703,7 +798,7 @@ function serve(s::Session; port::Integer = 8712,
             $(needserver(s).port); stop it first"))
     srv = Server(s, String(token),
         public_url === nothing ? nothing : String(public_url),
-        normpath(String(assets)), Task[], ReentrantLock(), nothing, Int(port),
+        normpath(String(assets)), Any[], ReentrantLock(), nothing, Int(port),
         Set{String}(), Set{String}(), nothing)
     srv.router = buildrouter(srv)
     http = HTTP.serve!("127.0.0.1", Int(port); stream = true, listenany = port == 0,
@@ -732,16 +827,26 @@ Stop serving: close the listener and every open WebSocket, and leave no task
 behind. A session that is not being served is left alone.
 """
 function stop!(srv::Server)
-    close(srv.http)
+    # Order matters. Closing the subscribers ends every writer task; closing the
+    # sockets ends every reader, and so releases the HTTP connections each one
+    # was holding active. Only then can the server be closed — `Base.close` waits
+    # for active connections, and `forceclose` shuts the rest down without
+    # waiting for a peer that may never answer.
     for sub in copy(srv.session.subscribers)
         unsubscribe!(srv.session, sub)
     end
-    tasks = lock(() -> (out = copy(srv.sockets); empty!(srv.sockets); out), srv.lock)
-    for t in tasks
-        istaskdone(t) || (try
-            wait(t)
-        catch
-        end)
+    sockets = lock(() -> (out = copy(srv.sockets); empty!(srv.sockets); out), srv.lock)
+    for ws in sockets
+        try
+            close(ws)
+        catch err
+            err isa InterruptException && rethrow()
+        end
+    end
+    try
+        HTTP.forceclose(srv.http)
+    catch err
+        err isa InterruptException && rethrow()
     end
     lock(() -> (srv.session.server = nothing), srv.session.lock)
     return srv
