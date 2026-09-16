@@ -133,6 +133,8 @@ Loki.loadtable
 ```@docs
 Loki.savesession
 Loki.opensession
+Loki.opensession!
+Loki.reset!
 ```
 
 ## User code

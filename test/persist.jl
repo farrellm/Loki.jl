@@ -230,3 +230,73 @@ end
         @test !isdir(joinpath(dir, "empty.tables"))
     end
 end
+
+@testset "opening into a live session" begin
+    dir = mktempdir()
+    original = Loki.Session(;
+        tables = (df = DataFrame(time = 1:20, x = Float64.(1:20)),),
+        contexts = (analysis = Context(0, 21), train = Context(0, 11)),
+        prelude = "helper(x) = x + 1")
+    src = Loki.addnode!(original, "table", Dict("table" => "df"))
+    sm = Loki.addnode!(original, "ema", Dict("column" => "x", "span" => 5))
+    Loki.connect!(original, (src, :out), (sm, :in))
+    path = Loki.savesession(joinpath(dir, "live.loki.json"), original)
+
+    @testset "the session object survives the swap" begin
+        live = Loki.Session(; contexts = (analysis = Context(0, 5),))
+        live.seq = 0
+        sub = Loki.subscribe!(live)
+        stale = Loki.addnode!(live, "emptyframe", Dict())
+        wait(Loki.run!(live, [stale]))
+        @test Loki.result(live, stale) !== nothing
+
+        @test Loki.opensession!(live, path) === live
+        @test sort(collect(keys(live.graph.nodes))) == [src, sm]
+        @test length(live.graph.edges) == 1
+        @test sort(collect(keys(live.contexts))) == ["analysis", "train"]
+        @test live.contexts["analysis"] == Context(0, 21)
+        @test live.usercode.prelude == "helper(x) = x + 1"
+        @test collect(keys(live.tables)) == ["df"]
+        @test live.graph.nextid == original.graph.nextid
+        # The session it replaced is gone, cache and statuses included. Ids are
+        # handed out afresh, so `stale` is checked by what it was, not by name.
+        @test length(live.graph.nodes) == 2
+        @test !any(n -> n.kind == "emptyframe", values(live.graph.nodes))
+        @test live.graph.nodes[src].kind == "table"
+        @test live.cache.bytes == 0
+        @test isempty(live.status)
+
+        # One event for the whole file, not one per node.
+        events = Loki.Event[]
+        Loki.unsubscribe!(live, sub)
+        while (e = Loki.nextevent(sub)) !== nothing
+            push!(events, e)
+        end
+        opened = only(e for e in events if get(e.payload, "change", "") == "open")
+        @test sort(opened.payload["invalidated"]) == [src, sm]
+        @test count(e -> get(e.payload, "change", "") == "addnode", events) == 1
+    end
+
+    @testset "a file this Loki cannot rebuild leaves the session alone" begin
+        live = Loki.opensession(path)
+        broken = joinpath(dir, "broken.loki.json")
+        write(broken, replace(read(path, String), "\"ema\"" => "\"nosuchkind\""))
+        @test_throws Loki.NodeError Loki.opensession!(live, broken)
+        @test sort(collect(keys(live.graph.nodes))) == [src, sm]
+        @test live.usercode.prelude == "helper(x) = x + 1"
+    end
+
+    @testset "reset! empties without replacing the session" begin
+        live = Loki.opensession(path)
+        wait(Loki.run!(live, [sm]))
+        @test Loki.reset!(live) === live
+        @test isempty(live.graph.nodes)
+        @test isempty(live.graph.edges)
+        @test isempty(live.contexts)
+        @test isempty(live.tables)
+        @test isempty(live.status)
+        @test live.usercode.prelude == ""
+        @test live.cache.bytes == 0
+        @test live.graph.nextid == 0
+    end
+end
