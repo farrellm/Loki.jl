@@ -106,7 +106,7 @@ function printcall(io::IO, e::Expr)
     print(io, "(")
     printargs(io, positional)
     if !isempty(keywords)
-        print(io, isempty(positional) ? "; " : "; ")
+        print(io, "; ")
         printargs(io, keywords)
     end
     return print(io, ")")
@@ -310,25 +310,27 @@ end
 # reads is that input's binding, not the one that writes the file.
 function inputbinding(bindings, g::Graph, from::Tuple{String,Symbol})
     id, port = from
-    if iswrite(nodekind(g.nodes[id].kind))
-        i = findfirst(e -> e.to == (id, :in), g.edges)
+    kind = nodekind(g.nodes[id].kind)
+    if iswrite(kind)
+        through = first(inputs(kind)).name
+        i = findfirst(e -> e.to == (id, through), g.edges)
         i === nothing && throw(NodeError(id,
-            ArgumentError("input port in is not connected")))
+            ArgumentError("input port $through is not connected")))
         return inputbinding(bindings, g, g.edges[i].from)
     end
     return bindings[(id, port)]
 end
 
+# A node with one output is named by its id alone; one with several carries the
+# port too.
+portsuffix(g::Graph, id::AbstractString, port::Symbol) =
+    length(outputs(nodekind(g.nodes[id].kind))) == 1 ? nothing : port
+
 bindingname(g::Graph, id::AbstractString, port::Symbol) =
-    scriptname("p_", id, length(outputs(nodekind(g.nodes[id].kind))) == 1 ? nothing : port)
+    scriptname("p_", id, portsuffix(g, id, port))
 
 framename(g::Graph, id::AbstractString, port::Symbol) =
-    scriptname(
-        "frame_",
-        id,
-        length(outputs(nodekind(g.nodes[id].kind))) == 1 ? nothing :
-        port,
-    )
+    scriptname("frame_", id, portsuffix(g, id, port))
 
 function scriptname(prefix::String, id::AbstractString, port)
     name = port === nothing ? Symbol(prefix, id) : Symbol(prefix, id, "_", port)
@@ -441,6 +443,9 @@ function loadlines(s::Session, wanted, bindings, ctxname::String, writes)
     lines = String[]
     for (id, port) in wanted
         haskey(bindings, (id, port)) || continue
+        # A run watching a write node passes its input through, so the port can be
+        # one of the run's targets; loading it here would write the file instead.
+        iswrite(nodekind(g.nodes[id].kind)) && continue
         push!(lines,
             exprstring(
                 Expr(:(=), framename(g, id, port),

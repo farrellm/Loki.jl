@@ -35,6 +35,11 @@ plain table holding what parquet cannot store is an `ArgumentError` naming the
 column — freeze the node that produced it, or export with `tables = :argument`.
 """
 function savetable(dir::AbstractString, name::AbstractString, table)
+    # A table name is free-form (`addtable!` takes any string) but becomes a file
+    # name here, so one carrying a path would write outside `dir` — or, more often,
+    # fail deep inside the writer with an unrecognisable error.
+    isfilename(name) || throw(ArgumentError("table name $(repr(name)) is not a file \
+        name, so it cannot be snapshotted; rename it"))
     bad = unstorablecolumn(table)
     if table isa CausalFrame
         ctx = context(table)
@@ -104,3 +109,9 @@ function parquetstorable(T)
         return true
     return S <: Dates.Date || S <: Dates.DateTime
 end
+
+# A name usable as a file name on any platform: no separator, no drive, and not a
+# directory of its own.
+isfilename(name::AbstractString) =
+    !isempty(name) && !(name in (".", "..")) &&
+    !any(c -> c in ('/', '\\', ':'), name)

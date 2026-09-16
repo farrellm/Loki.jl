@@ -64,10 +64,11 @@ emitkey(v) =
     Expr(:vect, Any[QuoteNode(Symbol(c)) for c in v]...)
 emitcolumns(v) = Any[QuoteNode(c) for c in paramcolumns(v)]
 emitcode(params::AbstractDict, name::String) =
-    params[name] === nothing ? nothing : Code(params[name])
+    get(params, name, nothing) === nothing ? nothing : Code(params[name])
 
 function emitrequiredcode(params::AbstractDict, name::String)
-    params[name] === nothing && throw(ArgumentError("the parameter $name is required"))
+    get(params, name, nothing) === nothing &&
+        throw(ArgumentError("the parameter $name is required"))
     return emitcode(params, name)
 end
 
@@ -183,8 +184,8 @@ columnexprs(cols) = Any[QuoteNode(c) for c in cols]
 # `FitModel(model, columns, response; …)` takes its model first, so it prints its
 # own call rather than the generic shape.
 emitfitmodel(cols::Vector{Symbol}, opts::Dict{String,Any}) =
-    opcall(:FitModel, Code(opts["model"]), Expr(:vect, columnexprs(cols)...),
-        QuoteNode(Symbol(opts["response"]));
+    opcall(:FitModel, emitrequiredcode(opts, "model"),
+        Expr(:vect, columnexprs(cols)...), QuoteNode(Symbol(opts["response"]));
         name = haskey(opts, "name") ? QuoteNode(Symbol(opts["name"])) : nothing,
         verbosity = get(opts, "verbosity", nothing))
 
@@ -213,10 +214,12 @@ const SUMMARIZERS = Dict{String,SummarizerSpec}(
     "LinearRegression" => SummarizerSpec("LinearRegression", LinearRegression;
         columns = -1, positional = ("response" => :symbol,),
         keywords = ("intercept" => :asis, "name" => :symbol)),
+    # `model` is positional here, not a keyword: it is required, and `checkentry`
+    # must reject an entry without it on both paths, as `emitfitmodel` does.
     "FitModel" => SummarizerSpec("FitModel",
-        (cols, response; model, kws...) -> FitModel(model, cols, response; kws...);
-        columns = -1, positional = ("response" => :symbol,),
-        keywords = ("model" => :code, "name" => :symbol, "verbosity" => :asis),
+        (cols, response, model; kws...) -> FitModel(model, cols, response; kws...);
+        columns = -1, positional = ("response" => :symbol, "model" => :code),
+        keywords = ("name" => :symbol, "verbosity" => :asis),
         emit = emitfitmodel),
     "Lags" => SummarizerSpec("Lags", Lags; columns = 1, positional = ("p" => :asis,),
         keywords = ("name" => :symbol,)),
@@ -347,17 +350,19 @@ function tablesource(env::BuildEnv, params::AbstractDict)
     if table isa CausalFrame
         # A frame's time is resolved and sorted already; it keeps readtable's frame
         # semantics, refusing a context outside its own.
-        params["time"] === nothing && !params["sort"] ||
+        params["time"] === nothing && !params["sort"] && params["checkorder"] ||
             throw(ArgumentError("table $(params["table"]) is a loaded frame, whose time \
-                column is already resolved"))
+                column is already resolved and in order, so it takes neither time, \
+                sort nor checkorder"))
         return readtable(table; closed...)
     end
     return readtable(table; time = paramsym(params["time"]), sort = params["sort"],
         checkorder = params["checkorder"], closed...)
 end
 
-# A frame takes neither `time` nor `sort` (`tablesource` rejects them), and every
-# other keyword is dropped at its default, so a frozen frame emits the bare
+# A frame takes none of `time`, `sort` and `checkorder` (`tablesource` rejects
+# them, since `readtable(::CausalFrame)` has no such keywords), and every other
+# keyword is dropped at its default, so a frozen frame emits the bare
 # `readtable(tables.name)` that reproduces it.
 emittablesource(params::AbstractDict) =
     opcall(:readtable, emittable(params["table"]); time = emitsym(params["time"]),
