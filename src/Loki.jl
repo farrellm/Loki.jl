@@ -15,7 +15,9 @@ using Parquet2: Parquet2
 # Imported, not used: MLJModelInterface re-exports the scientific types, and its
 # `Count` would clash with CausalFrames' summarizer.
 import MLJModelInterface
+using HTTP: HTTP
 using JSON3: JSON3
+using Random: Random
 using PrecompileTools: @setup_workload, @compile_workload
 
 using Dates: Dates
@@ -36,7 +38,7 @@ import StateSpaceModels as SSM
 
 export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
     boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia,
-    acf, pacf, adftest, ljungbox, fitreport, forecastfan
+    acf, pacf, adftest, ljungbox, fitreport, forecastfan, serve
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")
@@ -56,6 +58,7 @@ include("session.jl")
 # from a node kind's `emit` at run time.
 include("export.jl")
 include("persist.jl")
+include("server.jl")
 include("precompile.jl")
 
 end

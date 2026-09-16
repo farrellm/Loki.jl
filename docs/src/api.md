@@ -115,6 +115,20 @@ Loki.withorigin
 Loki.currentorigin
 ```
 
+## Server
+
+```@docs
+serve
+Loki.Server
+Loki.stop!
+Loki.server
+Loki.port
+Loki.token
+Loki.weburl
+Loki.graphjson
+Loki.nodecalls
+```
+
 ## Export
 
 ```@docs

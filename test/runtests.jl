@@ -34,6 +34,7 @@ include("fixtures.jl")
     include("engine.jl")
     include("diagnostics.jl")
     include("events.jl")
+    include("server.jl")
     include("export.jl")
     include("persist.jl")
 
