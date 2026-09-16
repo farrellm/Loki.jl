@@ -481,6 +481,20 @@ function buildrouter(srv::Server)
         jsonresponse(Dict("ok" => true, "id" => id))
     end)
 
+    HTTP.register!(r, "GET", "/api/results/{id}/{port}", function (req)
+        frame, _ = needsresult(s, req)
+        jsonresponse(preview(frame; offset = queryint(query(req), "offset", 0),
+            limit = min(queryint(query(req), "limit", 100), 1000),
+            columns = querycolumns(query(req)), key = querykey(query(req))))
+    end)
+
+    HTTP.register!(r, "GET", "/api/diagnostics/{id}/{port}/{kind}", function (req)
+        frame, node = needsresult(s, req)
+        kind = String(HTTP.getparams(req)["kind"])
+        jsonresponse(diagnostic(frame, kind;
+            params = diagnosticparams(s, node, kind, contextname(req), query(req))))
+    end)
+
     HTTP.register!(r, "GET", "/api/export", function (req)
         q = query(req)
         mode = Symbol(get(q, "tables", "argument"))
@@ -508,6 +522,70 @@ function buildrouter(srv::Server)
 end
 
 contextname(req::HTTP.Request) = String(get(query(req), "context", "analysis"))
+
+# The cached frame a results or diagnostics route is about, and the node it came
+# from. A node that exists but has not been evaluated is a 409 rather than a 404:
+# the client should run it, not go looking for a different id.
+function needsresult(s::Session, req::HTTP.Request)
+    params = HTTP.getparams(req)
+    id = needsnode(s, params["id"])
+    portname = Symbol(params["port"])
+    node = lock(() -> getnode(s.graph, id), s.lock)
+    portname in outputs(nodekind(node.kind)) ||
+        throw(NotFound("node $id ($(node.kind)) has no output port $portname"))
+    frame = result(s, id; port = portname, context = contextname(req))
+    frame === nothing && throw(NotEvaluated("node $id has not been evaluated over \
+        $(repr(contextname(req))); run it first", id, portname))
+    return frame, node
+end
+
+# What a diagnostic needs beyond its query string. This is the one place that
+# knows both the frame and the node that produced it, which is the only way the
+# Ljung-Box test can learn the degrees of freedom to give up: `applyarma` drops
+# the model column, so an in-sample residual stream carries no model, and the
+# orders live in the fit node's parameters.
+function diagnosticparams(s::Session, node::Node, kind::AbstractString,
+    context::AbstractString, q)
+    params = Dict{String,Any}(String(k) => v for (k, v) in q)
+    # A forecast fan needs the series and the model, which are two ports of the
+    # same node: the series is the port being asked about, and the models come
+    # from the `model` port beside it.
+    if kind == "forecast" && !haskey(params, "models")
+        models = modelsframe(s, node, context)
+        models === nothing || (params["models"] = models)
+    end
+    kind in ("residuals", "ljungbox") || return params
+    lock(s.lock) do
+        haskey(params, "dof") || begin
+            d = armaparamdof(node)
+            d === nothing || (params["dof"] = d)
+        end
+        haskey(params, "fitstop") || begin
+            name = get(node.params, "fitcontext", nothing)
+            name isa AbstractString && haskey(s.contexts, name) &&
+                (params["fitstop"] = s.contexts[name].stop)
+        end
+    end
+    return params
+end
+
+# The cached frame of a node's `model` port, if it has one and it has been run.
+function modelsframe(s::Session, node::Node, context::AbstractString)
+    :model in outputs(nodekind(node.kind)) || return nothing
+    return result(s, node.id; port = :model, context)
+end
+
+# `p + q + P + Q` from a fit node's own parameters.
+function armaparamdof(node::Node)
+    node.kind in ("fit", "fitarma") || return nothing
+    node.kind == "fit" && get(node.params, "family", nothing) != "arma" && return nothing
+    order = get(node.params, "order", nothing)
+    order isa AbstractVector && length(order) >= 3 || return nothing
+    seasonal = get(node.params, "seasonal_order", nothing)
+    extra = seasonal isa AbstractVector && length(seasonal) >= 4 ?
+            Int(seasonal[1]) + Int(seasonal[3]) : 0
+    return Int(order[1]) + Int(order[3]) + extra
+end
 
 nodekindsjson() = Any[nodekindjson(name) for name in nodekinds()]
 

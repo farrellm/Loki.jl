@@ -2,6 +2,7 @@
 # execute arbitrary Julia, so the containment is tested one bullet at a time.
 
 using HTTP: HTTP
+using Random: Xoshiro, randn
 
 # Start a server on a free port, run `body(ctx)`, and always stop it — a leaked
 # listener would fail Aqua's persistent-tasks check and every test after this one.
@@ -315,6 +316,105 @@ end
                 ["Authorization" => "Bearer $(ctx.token)"], UInt8[];
                 status_exception = false, retry = false)
             @test empty.status == 400
+        end
+    end
+
+    @testset "results and diagnostics" begin
+        withserver() do ctx
+            n1, n2, _ = buildchain(ctx)
+
+            # A node that exists but has not been run is a 409, not a 404: run
+            # it, do not go looking for another id.
+            notyet = ask(ctx, "GET", "/api/results/$n2/out")
+            @test notyet.status == 409
+            @test asjson(notyet).id == n2
+
+            runtoready(ctx, [n2])
+            page = asjson(ask(ctx, "GET", "/api/results/$n2/out?offset=2&limit=3"))
+            @test page.data.columns == ["time", "x", "k", "x_ema_5"]
+            @test length(page.data.rows) == 3
+            @test page.data.total == 80
+            @test page.data.rows[1][1] == 3
+            # The page size is capped, so one request cannot ask for a million rows.
+            @test length(asjson(ask(ctx, "GET",
+                "/api/results/$n2/out?limit=99999")).data.rows) <= 1000
+            keyed = asjson(ask(ctx, "GET", "/api/results/$n2/out?key=k%3Da&limit=500"))
+            @test keyed.data.total == 40
+            narrow = asjson(ask(ctx, "GET", "/api/results/$n2/out?columns=time,x_ema_5"))
+            @test narrow.data.columns == ["time", "x_ema_5"]
+
+            acf = asjson(ask(ctx, "GET",
+                "/api/diagnostics/$n2/out/acf?column=x&lags=10"))
+            @test acf.kind == "acf"
+            @test acf.summary.lags == 10
+            @test length(acf.data.values) == 11
+            series = asjson(ask(ctx, "GET",
+                "/api/diagnostics/$n2/out/series?columns=x,x_ema_5&maxpoints=20"))
+            @test length(series.data.series) == 2
+            @test series.data.series[1].downsampled == true
+
+            @test ask(ctx, "GET", "/api/diagnostics/$n2/out/nosuch?column=x").status == 400
+            @test ask(ctx, "GET", "/api/diagnostics/$n2/out/acf").status == 400
+            @test ask(ctx, "GET", "/api/results/$n2/nosuchport").status == 404
+            @test ask(ctx, "GET", "/api/results/nosuch/out").status == 404
+            @test ask(ctx, "GET", "/api/results/$n2/out?offset=-1").status == 400
+        end
+    end
+
+    # The Ljung-Box test has to give up the model's parameters as degrees of
+    # freedom, and `applyarma` drops the model column — so an in-sample stream
+    # carries no model. The route is the one place that knows both the frame and
+    # the node, and fills it in from the fit node's own parameters.
+    @testset "the residual panel gets its dof and fit window from the node" begin
+        rng = Xoshiro(17)
+        y = zeros(240)
+        for t in 2:240
+            y[t] = 0.7 * y[t-1] + randn(rng)
+        end
+        s = Loki.Session(; tables = (df = DataFrame(time = 1:240, y = y),),
+            contexts = (analysis = Context(0, 241), train = Context(0, 121)))
+        withserver(; session = s) do ctx
+            n1 = asjson(ask(ctx, "POST", "/api/nodes";
+                body = Dict("kind" => "table", "params" => Dict("table" => "df")))).id
+            fit = asjson(ask(ctx, "POST", "/api/nodes";
+                body = Dict("kind" => "fit",
+                    "params" => Dict("family" => "arma", "column" => "y",
+                        "order" => [2, 0, 1], "fitcontext" => "train")))).id
+            ask(ctx, "POST", "/api/edges";
+                body = Dict("from" => [n1, "out"], "to" => [fit, "in"]))
+            g = runtoready(ctx, [String(fit)])
+            node = only(n for n in g.nodes if n.id == fit)
+            # The fit's in-sample port looks ahead, and says so.
+            @test node.acausal == true
+            @test node.acausalports.insample == true
+            @test node.acausalports.model == false
+
+            panel = asjson(ask(ctx, "GET",
+                "/api/diagnostics/$fit/insample/residuals?column=y"))
+            @test panel.summary.dof == 3          # p + q, from the node's order
+            @test panel.summary.fitstop == 121    # from the node's fitcontext
+            @test panel.summary.insample.n == 120
+            @test panel.summary.outofsample.n == 120
+            @test sort(collect(String.(keys(panel.panels)))) ==
+                  ["acf", "fitted", "histogram", "ljungbox", "pacf", "qqplot", "series"]
+            # An explicit dof still wins.
+            @test asjson(ask(ctx, "GET",
+                "/api/diagnostics/$fit/insample/residuals?column=y&dof=5")).summary.dof ==
+                  5
+
+            report = asjson(ask(ctx, "GET", "/api/diagnostics/$fit/model/fit"))
+            @test report.summary.status == "ok"
+            @test report.summary.order == [2, 0, 1]
+
+            # The fan is asked for on the port that has the series; the route
+            # supplies the models from the `model` port beside it, because
+            # `applyarma` dropped that column on the way through.
+            fan = asjson(ask(ctx, "GET",
+                "/api/diagnostics/$fit/insample/forecast?column=y&h=4"))
+            @test fan.summary.h == 4
+            @test length(fan.data.mean) == 4
+            @test isempty(fan.warnings)
+            @test fan.summary.model.status == "ok"
         end
     end
 
