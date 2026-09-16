@@ -15,11 +15,13 @@ using Parquet2: Parquet2
 # Imported, not used: MLJModelInterface re-exports the scientific types, and its
 # `Count` would clash with CausalFrames' summarizer.
 import MLJModelInterface
+using JSON3: JSON3
 using PrecompileTools: @setup_workload, @compile_workload
 
 using Dates: Dates
 using Statistics: Statistics
 using DataFrames: DataFrame, nrow
+using Tables: Tables
 
 using LinearAlgebra: BLAS, I, dot
 using MatrixEquations: lyapd
@@ -28,7 +30,7 @@ using MatrixEquations: lyapd
 import StateSpaceModels as SSM
 
 export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
-    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce
+    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")
@@ -36,11 +38,16 @@ include("acausal.jl")
 include("registry.jl")
 include("graph.jl")
 include("usercode.jl")
+include("tables.jl")
 include("nodes/causalframes.jl")
 include("nodes/timeseries.jl")
 include("compile.jl")
 include("engine.jl")
 include("session.jl")
+# After the session: `exportjulia` takes one, and everything else here is reached
+# from a node kind's `emit` at run time.
+include("export.jl")
+include("persist.jl")
 include("precompile.jl")
 
 end

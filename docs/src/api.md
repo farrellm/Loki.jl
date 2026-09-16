@@ -58,6 +58,26 @@ Loki.nodekind
 Loki.nodekinds
 ```
 
+## Export
+
+```@docs
+exportjulia
+Loki.emit
+Loki.canemit
+Loki.Code
+Loki.exprstring
+Loki.TableFile
+Loki.savetable
+Loki.loadtable
+```
+
+## Persistence
+
+```@docs
+Loki.savesession
+Loki.opensession
+```
+
 ## User code
 
 ```@docs

@@ -38,6 +38,60 @@ function atleastone(ps, what::String)
     return ps
 end
 
+# --- emit helpers ---------------------------------------------------------------
+#
+# One converter per `build` converter, turning the same parameter into script
+# text instead of a value: `paramsym`/`emitsym`, `paramkey`/`emitkey`, and so on.
+# A keyword whose value is `nothing` is left out of the call, and `unless` drops
+# one that is already the operator's own default, so a script says what the user
+# chose and nothing more.
+
+# `f(args...; kwargs...)`, without the keywords whose value is `nothing`.
+function opcall(f, args...; kwargs...)
+    kws = Any[Expr(:kw, Symbol(k), v) for (k, v) in pairs(kwargs) if v !== nothing]
+    isempty(kws) && return Expr(:call, f, args...)
+    return Expr(:call, f, Expr(:parameters, kws...), args...)
+end
+
+emitpipe(input, call) = Expr(:call, :|>, input, call)
+
+unless(value, default) = value == default ? nothing : value
+
+emitsym(v) = v === nothing ? nothing : QuoteNode(Symbol(v))
+emitkey(v) =
+    v === nothing ? nothing :
+    v isa AbstractString ? QuoteNode(Symbol(v)) :
+    Expr(:vect, Any[QuoteNode(Symbol(c)) for c in v]...)
+emitcolumns(v) = Any[QuoteNode(c) for c in paramcolumns(v)]
+emitcode(params::AbstractDict, name::String) =
+    get(params, name, nothing) === nothing ? nothing : Code(params[name])
+
+function emitrequiredcode(params::AbstractDict, name::String)
+    get(params, name, nothing) === nothing &&
+        throw(ArgumentError("the parameter $name is required"))
+    return emitcode(params, name)
+end
+
+# A column selection, as `build`'s `selectors` spells it: the named columns and
+# then the `match` expression.
+function emitselectors(params::AbstractDict)
+    sels = emitcolumns(params["columns"])
+    match = emitcode(params, "match")
+    match === nothing || push!(sels, match)
+    isempty(sels) &&
+        throw(ArgumentError("select at least one column, by name or with match"))
+    return sels
+end
+
+# A session table is a field of the script's `tables`; a context is the `const`
+# binding the script gives it.
+emittable(name) = Expr(:., :tables, QuoteNode(Symbol(name)))
+emitcontext(name) = Symbol(name)
+
+# `A.B.c`, for the names a script cannot reach unqualified.
+qualified(parts::Symbol...) =
+    foldl((mod, name) -> Expr(:., mod, QuoteNode(name)), parts[2:end]; init = parts[1])
+
 const KEY = Param("key", :columns; description = "key column(s): state is kept per key")
 const SELECTION = [
     Param("columns", :columns; description = "column names"),
@@ -48,87 +102,162 @@ const ONEINPUT = [Port(:in)]
 
 # --- summarizer entries --------------------------------------------------------------
 
-# Option converters: (value, env) -> argument.
-asis(v, ::BuildEnv) = v
-assymbol(v, ::BuildEnv) = Symbol(v)
-astuple(v, ::BuildEnv) = Tuple(v)
-ascode(v, env::BuildEnv) = evalcode(env.usercode, v; what = "summarizer option")
-
-# A summarizer constructor from an entry's columns and options: `columns` is the
-# number of column arguments (-1: one vector of at least one), `positional` the
-# required options passed after them, `keywords` the optional ones.
-function summarymaker(f, what::String; columns::Int, positional = (), keywords = ())
-    known = (first.(positional)..., first.(keywords)...)
-    return function (cols::Vector{Symbol}, opts::Dict{String,Any}, env::BuildEnv)
-        if columns < 0
-            isempty(cols) && throw(ArgumentError("$what needs at least one column"))
-        elseif length(cols) != columns
-            throw(ArgumentError("$what takes $columns column(s), got $(length(cols))"))
-        end
-        for k in keys(opts)
-            k in known || throw(ArgumentError("$what has no option $(repr(k))"))
-        end
-        pos = map(positional) do (k, convert)
-            haskey(opts, k) || throw(ArgumentError("$what needs the option $(repr(k))"))
-            convert(opts[k], env)
-        end
-        kws = (;
-            (
-                Symbol(k) => convert(opts[k], env) for (k, convert) in keywords
-                if haskey(opts, k)
-            )...
-        )
-        colargs = columns < 0 ? (cols,) : Tuple(cols)
-        return f(colargs..., pos...; kws...)
-    end
+# A summarizer entry is described once and read twice: `summarizer` builds the
+# value, `emitsummarizer` prints the constructor call. `columns` is the number of
+# column arguments (-1: one vector of at least one), `positional` the required
+# options passed after them, `keywords` the optional ones; each option carries a
+# converter tag with both a value form and an expression form.
+struct SummarizerSpec
+    name::String
+    make::Any
+    columns::Int
+    positional::Vector{Pair{String,Symbol}}
+    keywords::Vector{Pair{String,Symbol}}
+    emitter::Any    # `nothing`: the generic `Name(columns…, positional…; keywords…)`
 end
 
-const SUMMARIZERS = Dict{String,Any}(
-    "Count" => summarymaker(Count, "Count"; columns = 0),
-    "CountDistinct" => summarymaker(CountDistinct, "CountDistinct"; columns = 1),
-    "Sum" => summarymaker(Sum, "Sum"; columns = 1),
-    "Product" => summarymaker(Product, "Product"; columns = 1),
-    "Mean" => summarymaker(Mean, "Mean"; columns = 1),
-    "Min" => summarymaker(Min, "Min"; columns = 1),
-    "Max" => summarymaker(Max, "Max"; columns = 1),
-    "First" => summarymaker(First, "First"; columns = 1),
-    "Last" => summarymaker(Last, "Last"; columns = 1),
+SummarizerSpec(name::AbstractString, make; columns::Int, positional = (),
+    keywords = (), emit = nothing) =
+    SummarizerSpec(String(name), make, columns,
+        Pair{String,Symbol}[String(k) => v for (k, v) in positional],
+        Pair{String,Symbol}[String(k) => v for (k, v) in keywords], emit)
+
+optionvalue(::Val{:asis}, v, ::BuildEnv) = v
+optionvalue(::Val{:symbol}, v, ::BuildEnv) = Symbol(v)
+optionvalue(::Val{:tuple}, v, ::BuildEnv) = Tuple(v)
+optionvalue(::Val{:code}, v, env::BuildEnv) =
+    evalcode(env.usercode, v; what = "summarizer option")
+
+optionexpr(::Val{:asis}, v) = v
+optionexpr(::Val{:symbol}, v) = QuoteNode(Symbol(v))
+optionexpr(::Val{:tuple}, v) = Expr(:tuple, v...)
+optionexpr(::Val{:code}, v) = Code(v)
+
+# Both paths reject the same entries, so what exports is what the session built.
+function checkentry(spec::SummarizerSpec, cols::Vector{Symbol}, opts::Dict{String,Any})
+    if spec.columns < 0
+        isempty(cols) && throw(ArgumentError("$(spec.name) needs at least one column"))
+    elseif length(cols) != spec.columns
+        throw(ArgumentError("$(spec.name) takes $(spec.columns) column(s), \
+            got $(length(cols))"))
+    end
+    known = [first.(spec.positional); first.(spec.keywords)]
+    for k in keys(opts)
+        k in known || throw(ArgumentError("$(spec.name) has no option $(repr(k))"))
+    end
+    for (k, _) in spec.positional
+        haskey(opts, k) ||
+            throw(ArgumentError("$(spec.name) needs the option $(repr(k))"))
+    end
+    return nothing
+end
+
+function makesummarizer(spec::SummarizerSpec, cols::Vector{Symbol},
+    opts::Dict{String,Any}, env::BuildEnv)
+    checkentry(spec, cols, opts)
+    pos = Any[optionvalue(Val(tag), opts[k], env) for (k, tag) in spec.positional]
+    kws = (;
+        (
+            Symbol(k) => optionvalue(Val(tag), opts[k], env)
+            for (k, tag) in spec.keywords if haskey(opts, k)
+        )...
+    )
+    colargs = spec.columns < 0 ? (cols,) : Tuple(cols)
+    return spec.make(colargs..., pos...; kws...)
+end
+
+function emitsummarizerspec(spec::SummarizerSpec, cols::Vector{Symbol},
+    opts::Dict{String,Any})
+    checkentry(spec, cols, opts)
+    spec.emitter === nothing || return spec.emitter(cols, opts)
+    pos = Any[optionexpr(Val(tag), opts[k]) for (k, tag) in spec.positional]
+    kws = Pair{Symbol,Any}[
+        Symbol(k) => optionexpr(Val(tag), opts[k])
+        for (k, tag) in spec.keywords if haskey(opts, k)
+    ]
+    colargs = spec.columns < 0 ? Any[Expr(:vect, columnexprs(cols)...)] : columnexprs(cols)
+    return opcall(Symbol(spec.name), colargs..., pos...; kws...)
+end
+
+columnexprs(cols) = Any[QuoteNode(c) for c in cols]
+
+# `FitModel(model, columns, response; …)` takes its model first, so it prints its
+# own call rather than the generic shape.
+emitfitmodel(cols::Vector{Symbol}, opts::Dict{String,Any}) =
+    opcall(:FitModel, emitrequiredcode(opts, "model"),
+        Expr(:vect, columnexprs(cols)...), QuoteNode(Symbol(opts["response"]));
+        name = haskey(opts, "name") ? QuoteNode(Symbol(opts["name"])) : nothing,
+        verbosity = get(opts, "verbosity", nothing))
+
+const SUMMARIZERS = Dict{String,SummarizerSpec}(
+    "Count" => SummarizerSpec("Count", Count; columns = 0),
+    "CountDistinct" => SummarizerSpec("CountDistinct", CountDistinct; columns = 1),
+    "Sum" => SummarizerSpec("Sum", Sum; columns = 1),
+    "Product" => SummarizerSpec("Product", Product; columns = 1),
+    "Mean" => SummarizerSpec("Mean", Mean; columns = 1),
+    "Min" => SummarizerSpec("Min", Min; columns = 1),
+    "Max" => SummarizerSpec("Max", Max; columns = 1),
+    "First" => SummarizerSpec("First", First; columns = 1),
+    "Last" => SummarizerSpec("Last", Last; columns = 1),
     "SumPower" =>
-        summarymaker(SumPower, "SumPower"; columns = 1, positional = ("n" => asis,)),
+        SummarizerSpec("SumPower", SumPower; columns = 1, positional = ("n" => :asis,)),
     "Moment" =>
-        summarymaker(Moment, "Moment"; columns = 1, positional = ("n" => asis,)),
-    "Variance" => summarymaker(Variance, "Variance"; columns = 1,
-        keywords = ("corrected" => asis,)),
-    "Std" => summarymaker(Std, "Std"; columns = 1, keywords = ("corrected" => asis,)),
-    "DotProduct" => summarymaker(DotProduct, "DotProduct"; columns = 2),
-    "Correlation" => summarymaker(Correlation, "Correlation"; columns = 2),
-    "Covariance" => summarymaker(Covariance, "Covariance"; columns = 2,
-        keywords = ("corrected" => asis,)),
-    "LinearRegression" => summarymaker(LinearRegression, "LinearRegression";
-        columns = -1, positional = ("response" => assymbol,),
-        keywords = ("intercept" => asis, "name" => assymbol)),
-    "FitModel" => summarymaker(
-        (cols, response; model, kws...) -> FitModel(model, cols, response; kws...),
-        "FitModel"; columns = -1, positional = ("response" => assymbol,),
-        keywords = ("model" => ascode, "name" => assymbol, "verbosity" => asis)),
-    "Lags" => summarymaker(Lags, "Lags"; columns = 1, positional = ("p" => asis,),
-        keywords = ("name" => assymbol,)),
-    "EMA" => summarymaker(EMA, "EMA"; columns = 1,
-        keywords = ("span" => asis, "halflife" => ascode, "name" => assymbol)),
-    "FitARMA" => summarymaker(FitARMA, "FitARMA"; columns = 1,
-        keywords = ("order" => astuple, "seasonal_order" => astuple,
-            "include_mean" => asis, "name" => assymbol)),
+        SummarizerSpec("Moment", Moment; columns = 1, positional = ("n" => :asis,)),
+    "Variance" => SummarizerSpec("Variance", Variance; columns = 1,
+        keywords = ("corrected" => :asis,)),
+    "Std" =>
+        SummarizerSpec("Std", Std; columns = 1, keywords = ("corrected" => :asis,)),
+    "DotProduct" => SummarizerSpec("DotProduct", DotProduct; columns = 2),
+    "Correlation" => SummarizerSpec("Correlation", Correlation; columns = 2),
+    "Covariance" => SummarizerSpec("Covariance", Covariance; columns = 2,
+        keywords = ("corrected" => :asis,)),
+    "LinearRegression" => SummarizerSpec("LinearRegression", LinearRegression;
+        columns = -1, positional = ("response" => :symbol,),
+        keywords = ("intercept" => :asis, "name" => :symbol)),
+    # `model` is positional here, not a keyword: it is required, and `checkentry`
+    # must reject an entry without it on both paths, as `emitfitmodel` does.
+    "FitModel" => SummarizerSpec("FitModel",
+        (cols, response, model; kws...) -> FitModel(model, cols, response; kws...);
+        columns = -1, positional = ("response" => :symbol, "model" => :code),
+        keywords = ("name" => :symbol, "verbosity" => :asis),
+        emit = emitfitmodel),
+    "Lags" => SummarizerSpec("Lags", Lags; columns = 1, positional = ("p" => :asis,),
+        keywords = ("name" => :symbol,)),
+    "EMA" => SummarizerSpec("EMA", EMA; columns = 1,
+        keywords = ("span" => :asis, "halflife" => :code, "name" => :symbol)),
+    "FitARMA" => SummarizerSpec("FitARMA", FitARMA; columns = 1,
+        keywords = ("order" => :tuple, "seasonal_order" => :tuple,
+            "include_mean" => :asis, "name" => :symbol)),
 )
 
 # The summarizers named by a `:summarizers` parameter: entries of the form
 # `{"summarizer": name, "columns": [...], "options": {...}}`.
 function summarizers(env::BuildEnv, entries)
-    (entries === nothing || isempty(entries)) &&
-        throw(ArgumentError("at least one summarizer is required"))
+    checkentries(entries)
     return Summarizer[summarizer(env, entry) for entry in entries]
 end
 
+# The same list as a vector literal of constructor calls.
+function emitsummarizers(entries)
+    checkentries(entries)
+    return Expr(:vect, Any[emitsummarizer(entry) for entry in entries]...)
+end
+
+checkentries(entries) =
+    (entries === nothing || isempty(entries)) &&
+    throw(ArgumentError("at least one summarizer is required"))
+
 function summarizer(env::BuildEnv, entry::AbstractDict)
+    spec, cols, opts = entryparts(entry)
+    return makesummarizer(spec, cols, opts, env)
+end
+
+function emitsummarizer(entry::AbstractDict)
+    spec, cols, opts = entryparts(entry)
+    return emitsummarizerspec(spec, cols, opts)
+end
+
+function entryparts(entry::AbstractDict)
     e = stringkeys(entry)
     for k in keys(e)
         k in ("summarizer", "columns", "options") ||
@@ -137,12 +266,12 @@ function summarizer(env::BuildEnv, entry::AbstractDict)
     name = get(e, "summarizer", nothing)
     name isa AbstractString ||
         throw(ArgumentError("a summarizer entry needs a \"summarizer\" name"))
-    maker = get(SUMMARIZERS, name, nothing)
-    maker === nothing && throw(ArgumentError("unknown summarizer $(repr(name)); \
+    spec = get(SUMMARIZERS, name, nothing)
+    spec === nothing && throw(ArgumentError("unknown summarizer $(repr(name)); \
         known: $(join(sort!(collect(keys(SUMMARIZERS))), ", "))"))
     options = get(e, "options", nothing)
-    return maker(paramcolumns(get(e, "columns", nothing)),
-        options === nothing ? Dict{String,Any}() : stringkeys(options), env)
+    return spec, paramcolumns(get(e, "columns", nothing)),
+    options === nothing ? Dict{String,Any}() : stringkeys(options)
 end
 
 # --- sources -----------------------------------------------------------------------
@@ -150,7 +279,8 @@ end
 register_nodekind!(
     OpKind("emptyframe"; category = "sources",
         doc = "A source that produces no rows.",
-        build = (params, inputs, env) -> (; out = emptyframe())),
+        build = (params, inputs, env) -> (; out = emptyframe()),
+        emit = (params, inputs) -> (; out = opcall(:emptyframe))),
 )
 
 register_nodekind!(
@@ -165,6 +295,11 @@ register_nodekind!(
             (;
                 out = clock(requiredcode(env, params, "interval");
                     batchsize = params["batchsize"])
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = opcall(:clock, emitrequiredcode(params, "interval");
+                    batchsize = unless(params["batchsize"], 1024))
             )),
 )
 
@@ -173,7 +308,9 @@ register_nodekind!(
         doc = "The inputs' outputs end to end, in connection order.",
         inputs = [Port(:in; variadic = true)],
         build = (params, inputs, env) ->
-            (; out = concatenate(atleastone(inputs[:in], "concatenate")...))),
+            (; out = concatenate(atleastone(inputs[:in], "concatenate")...)),
+        emit = (params, inputs) ->
+            (; out = opcall(:concatenate, atleastone(inputs[:in], "concatenate")...))),
 )
 
 register_nodekind!(
@@ -185,6 +322,11 @@ register_nodekind!(
             (;
                 out = merge(atleastone(inputs[:in], "merge")...;
                     batchsize = params["batchsize"])
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = opcall(:merge, atleastone(inputs[:in], "merge")...;
+                    batchsize = unless(params["batchsize"], 1024))
             )),
 )
 
@@ -198,7 +340,8 @@ register_nodekind!(
             Param("checkorder", :boolean; default = true),
             Param("closed", :boolean; description = "keep the rows at stop"),
         ],
-        build = (params, inputs, env) -> (; out = tablesource(env, params))),
+        build = (params, inputs, env) -> (; out = tablesource(env, params)),
+        emit = (params, inputs) -> (; out = emittablesource(params))),
 )
 
 function tablesource(env::BuildEnv, params::AbstractDict)
@@ -207,14 +350,24 @@ function tablesource(env::BuildEnv, params::AbstractDict)
     if table isa CausalFrame
         # A frame's time is resolved and sorted already; it keeps readtable's frame
         # semantics, refusing a context outside its own.
-        params["time"] === nothing && !params["sort"] ||
+        params["time"] === nothing && !params["sort"] && params["checkorder"] ||
             throw(ArgumentError("table $(params["table"]) is a loaded frame, whose time \
-                column is already resolved"))
+                column is already resolved and in order, so it takes neither time, \
+                sort nor checkorder"))
         return readtable(table; closed...)
     end
     return readtable(table; time = paramsym(params["time"]), sort = params["sort"],
         checkorder = params["checkorder"], closed...)
 end
+
+# A frame takes none of `time`, `sort` and `checkorder` (`tablesource` rejects
+# them, since `readtable(::CausalFrame)` has no such keywords), and every other
+# keyword is dropped at its default, so a frozen frame emits the bare
+# `readtable(tables.name)` that reproduces it.
+emittablesource(params::AbstractDict) =
+    opcall(:readtable, emittable(params["table"]); time = emitsym(params["time"]),
+        sort = unless(params["sort"], false),
+        checkorder = unless(params["checkorder"], true), closed = params["closed"])
 
 # --- files --------------------------------------------------------------------------
 
@@ -252,6 +405,14 @@ register_nodekind!(
                     rename = paramcode(env, params, "rename"), delim = params["delim"],
                     sort = params["sort"], closed = params["closed"],
                     chunkbytes = params["chunkbytes"])
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = opcall(:readcsv, params["path"]; types = emitcode(params, "types"),
+                    time = emitcode(params, "time"), rename = emitcode(params, "rename"),
+                    delim = params["delim"], sort = unless(params["sort"], false),
+                    closed = unless(params["closed"], false),
+                    chunkbytes = unless(params["chunkbytes"], 4 * 1024 * 1024))
             )),
 )
 
@@ -260,7 +421,12 @@ register_nodekind!(
         doc = "Write the stream to a CSV file as it flows by.",
         inputs = ONEINPUT, params = [PATH, QUEUE],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> writecsv(params["path"]; queue = params["queue"]))),
+            (; out = inputs[:in] |> writecsv(params["path"]; queue = params["queue"])),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:writecsv, params["path"]; queue = unless(params["queue"], 1)))
+            )),
 )
 
 register_nodekind!(
@@ -273,6 +439,14 @@ register_nodekind!(
                 out = readparquet(params["path"]; time = paramcode(env, params, "time"),
                     rename = paramcode(env, params, "rename"), sort = params["sort"],
                     closed = params["closed"], backend = Symbol(params["backend"]))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = opcall(:readparquet, params["path"];
+                    time = emitcode(params, "time"), rename = emitcode(params, "rename"),
+                    sort = unless(params["sort"], false),
+                    closed = unless(params["closed"], false),
+                    backend = emitsym(unless(params["backend"], "auto")))
             )),
 )
 
@@ -291,6 +465,14 @@ register_nodekind!(
                 out = inputs[:in] |> writeparquet(params["path"]; queue = params["queue"],
                     rowgroupsize = params["rowgroupsize"],
                     backend = Symbol(params["backend"]))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:writeparquet, params["path"];
+                        queue = unless(params["queue"], 1),
+                        rowgroupsize = unless(params["rowgroupsize"], 1_000_000),
+                        backend = emitsym(unless(params["backend"], "auto"))))
             )),
 )
 
@@ -299,7 +481,12 @@ register_nodekind!(
         doc = "Read a file written by writejls.",
         params = [PATH, CLOSED],
         build = (params, inputs, env) ->
-            (; out = readjls(params["path"]; closed = params["closed"]))),
+            (; out = readjls(params["path"]; closed = params["closed"])),
+        emit = (params, inputs) ->
+            (;
+                out = opcall(:readjls, params["path"];
+                    closed = unless(params["closed"], false))
+            )),
 )
 
 register_nodekind!(
@@ -307,7 +494,12 @@ register_nodekind!(
         doc = "Write the stream through Julia's Serialization as it flows by.",
         inputs = ONEINPUT, params = [PATH, QUEUE],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> writejls(params["path"]; queue = params["queue"]))),
+            (; out = inputs[:in] |> writejls(params["path"]; queue = params["queue"])),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:writejls, params["path"]; queue = unless(params["queue"], 1)))
+            )),
 )
 
 # --- rows and columns ---------------------------------------------------------------
@@ -320,7 +512,12 @@ register_nodekind!(
             Param("predicate", :code; required = true, description = "e.g. `r -> r.x > 0`"),
         ],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> filterrows(requiredcode(env, params, "predicate")))),
+            (; out = inputs[:in] |> filterrows(requiredcode(env, params, "predicate"))),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:filterrows, emitrequiredcode(params, "predicate")))
+            )),
 )
 
 register_nodekind!(
@@ -332,7 +529,12 @@ register_nodekind!(
                 description = "e.g. `r -> (; mid = (r.bid + r.ask) / 2)`"),
         ],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> addcolumns(requiredcode(env, params, "function")))),
+            (; out = inputs[:in] |> addcolumns(requiredcode(env, params, "function"))),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:addcolumns, emitrequiredcode(params, "function")))
+            )),
 )
 
 for (name, op, doc) in (
@@ -344,7 +546,12 @@ for (name, op, doc) in (
         OpKind(name; category = "columns", doc, inputs = ONEINPUT,
             params = SELECTION,
             build = (params, inputs, env) ->
-                (; out = inputs[:in] |> op(selectors(env, params)...))),
+                (; out = inputs[:in] |> op(selectors(env, params)...)),
+            emit = (params, inputs) ->
+                (;
+                    out = emitpipe(inputs[:in],
+                        opcall(Symbol(name), emitselectors(params)...))
+                )),
     )
 end
 
@@ -353,14 +560,21 @@ register_nodekind!(
         doc = "Shift every row later in time by an offset.",
         inputs = ONEINPUT, params = [Param("offset", :code; required = true)],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> lag(requiredcode(env, params, "offset")))),
+            (; out = inputs[:in] |> lag(requiredcode(env, params, "offset"))),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:lag, emitrequiredcode(params, "offset")))
+            )),
 )
 
 register_nodekind!(
     OpKind("head"; category = "rows",
         doc = "The first n rows.",
         inputs = ONEINPUT, params = [Param("n", :integer; required = true)],
-        build = (params, inputs, env) -> (; out = inputs[:in] |> head(params["n"]))),
+        build = (params, inputs, env) -> (; out = inputs[:in] |> head(params["n"])),
+        emit = (params, inputs) ->
+            (; out = emitpipe(inputs[:in], opcall(:head, params["n"])))),
 )
 
 register_nodekind!(
@@ -372,7 +586,14 @@ register_nodekind!(
                 description = "a column name like `:ts`, or `row -> time`"),
         ],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> settime(requiredcode(env, params, "spec")))),
+            (; out = inputs[:in] |> settime(requiredcode(env, params, "spec"))),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(
+                    inputs[:in],
+                    opcall(:settime, emitrequiredcode(params, "spec")),
+                )
+            )),
 )
 
 register_nodekind!(
@@ -380,7 +601,11 @@ register_nodekind!(
         doc = "The last row (per key), at the window's stop.",
         inputs = ONEINPUT, params = [KEY],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> lastrow(; key = paramkey(params["key"])))),
+            (; out = inputs[:in] |> lastrow(; key = paramkey(params["key"]))),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in], opcall(:lastrow; key = emitkey(params["key"])))
+            )),
 )
 
 register_nodekind!(
@@ -394,7 +619,13 @@ register_nodekind!(
             Param("rev", :boolean; default = false),
         ],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> sortcycles(sortkey(env, params); rev = params["rev"]))),
+            (; out = inputs[:in] |> sortcycles(sortkey(env, params); rev = params["rev"])),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:sortcycles, emitsortkey(params);
+                        rev = unless(params["rev"], false)))
+            )),
 )
 
 # `sortcycles`' `by`: the named columns or a key function, exactly one of them.
@@ -403,6 +634,13 @@ function sortkey(env::BuildEnv, params::AbstractDict)
         throw(ArgumentError("sort by columns or by a function, exactly one of them"))
     params["columns"] === nothing && return paramcode(env, params, "function")
     return paramcolumns(params["columns"])
+end
+
+function emitsortkey(params::AbstractDict)
+    (params["columns"] === nothing) == (params["function"] === nothing) &&
+        throw(ArgumentError("sort by columns or by a function, exactly one of them"))
+    params["columns"] === nothing && return emitcode(params, "function")
+    return Expr(:vect, emitcolumns(params["columns"])...)
 end
 
 register_nodekind!(
@@ -414,6 +652,13 @@ register_nodekind!(
                 out = inputs[:in] |> forwardfill(selectors(env, params)...;
                     key = paramkey(params["key"]),
                     tolerance = paramcode(env, params, "tolerance"))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:forwardfill, emitselectors(params)...;
+                        key = emitkey(params["key"]),
+                        tolerance = emitcode(params, "tolerance")))
             )),
 )
 
@@ -425,7 +670,12 @@ register_nodekind!(
             Param("values", :code; required = true, description = "e.g. `(; x = 0.0)`"),
         ],
         build = (params, inputs, env) ->
-            (; out = inputs[:in] |> fillmissing(requiredcode(env, params, "values")))),
+            (; out = inputs[:in] |> fillmissing(requiredcode(env, params, "values"))),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:fillmissing, emitrequiredcode(params, "values")))
+            )),
 )
 
 # --- summarizing -----------------------------------------------------------------------
@@ -445,6 +695,12 @@ for (name, op, doc) in (
                 (;
                     out = inputs[:in] |> op(summarizers(env, params["summarizers"]);
                         key = paramkey(params["key"]))
+                ),
+            emit = (params, inputs) ->
+                (;
+                    out = emitpipe(inputs[:in],
+                        opcall(Symbol(name), emitsummarizers(params["summarizers"]);
+                            key = emitkey(params["key"])))
                 )),
     )
 end
@@ -459,6 +715,13 @@ register_nodekind!(
                       summarizecycles(summarizers(env, params["summarizers"]);
                     key = paramkey(params["key"]),
                     keyset = paramcode(env, params, "keyset"))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:summarizecycles, emitsummarizers(params["summarizers"]);
+                        key = emitkey(params["key"]),
+                        keyset = emitcode(params, "keyset")))
             )),
 )
 
@@ -473,6 +736,14 @@ register_nodekind!(
                       addrollingcolumns(requiredcode(env, params, "windows"),
                     summarizers(env, params["summarizers"]); key = paramkey(params["key"]),
                     from = get(inputs, :from, nothing))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:data],
+                    opcall(:addrollingcolumns, emitrequiredcode(params, "windows"),
+                        emitsummarizers(params["summarizers"]);
+                        key = emitkey(params["key"]),
+                        from = get(inputs, :from, nothing)))
             )),
 )
 
@@ -492,6 +763,15 @@ register_nodekind!(
                     summarizers(env, params["summarizers"]); key = paramkey(params["key"]),
                     keyset = paramcode(env, params, "keyset"),
                     closelast = params["closelast"])
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:data],
+                    opcall(:intervalize, inputs[:clock],
+                        emitsummarizers(params["summarizers"]);
+                        key = emitkey(params["key"]),
+                        keyset = emitcode(params, "keyset"),
+                        closelast = unless(params["closelast"], false)))
             )),
 )
 
@@ -507,6 +787,15 @@ register_nodekind!(
                     summarizers(env, params["summarizers"]);
                     key = paramkey(params["key"]),
                     keyset = paramcode(env, params, "keyset"))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:data],
+                    opcall(:summarizewindows, inputs[:clock],
+                        emitrequiredcode(params, "lookback"),
+                        emitsummarizers(params["summarizers"]);
+                        key = emitkey(params["key"]),
+                        keyset = emitcode(params, "keyset")))
             )),
 )
 
@@ -526,12 +815,22 @@ joinkwargs(env::BuildEnv, params::AbstractDict) = (;
     strict = params["strict"], leftprefix = params["leftprefix"],
     rightprefix = params["rightprefix"], righttime = paramsym(params["righttime"]))
 
+emitjoinkwargs(params::AbstractDict) = (;
+    key = emitkey(params["key"]), tolerance = emitcode(params, "tolerance"),
+    strict = unless(params["strict"], false), leftprefix = params["leftprefix"],
+    rightprefix = params["rightprefix"], righttime = emitsym(params["righttime"]))
+
 register_nodekind!(
     OpKind("asofjoin"; category = "joins",
         doc = "Join each left row to the latest right row not after it.",
         inputs = [Port(:left), Port(:right)], params = JOINPARAMS,
         build = (params, inputs, env) ->
             (; out = inputs[:left] |> asofjoin(inputs[:right]; joinkwargs(env, params)...)),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:left],
+                    opcall(:asofjoin, inputs[:right]; emitjoinkwargs(params)...))
+            ),
     ),
 )
 
@@ -553,6 +852,15 @@ register_nodekind!(
                     key = paramkey(params["key"]),
                     unmatched = Symbol(params["unmatched"]),
                     leftprefix = params["leftprefix"], rightprefix = params["rightprefix"])
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:lookupjoin, emittable(params["table"]);
+                        key = emitkey(params["key"]),
+                        unmatched = emitsym(unless(params["unmatched"], "missing")),
+                        leftprefix = params["leftprefix"],
+                        rightprefix = params["rightprefix"]))
             )),
 )
 
@@ -578,6 +886,17 @@ register_nodekind!(
                     tolerance = paramcode(env, params, "tolerance"),
                     strict = params["strict"],
                     name = Symbol(params["name"]), operation = Symbol(params["operation"]))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:data],
+                    opcall(:applymodels, inputs[:models];
+                        column = emitsym(unless(params["column"], "model")),
+                        key = emitkey(params["key"]),
+                        tolerance = emitcode(params, "tolerance"),
+                        strict = unless(params["strict"], false),
+                        name = emitsym(unless(params["name"], "prediction")),
+                        operation = emitsym(unless(params["operation"], "predict"))))
             )),
 )
 
@@ -602,6 +921,19 @@ register_nodekind!(
                     key = paramkey(params["key"]), name = Symbol(params["name"]),
                     operation = Symbol(params["operation"]), verbosity = params["verbosity"],
                 )
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:data],
+                    opcall(:addpredictions, inputs[:clock],
+                        emitrequiredcode(params, "lookback"),
+                        emitrequiredcode(params, "model"),
+                        Expr(:vect, emitcolumns(params["predictors"])...),
+                        QuoteNode(Symbol(params["response"]));
+                        key = emitkey(params["key"]),
+                        name = emitsym(unless(params["name"], "prediction")),
+                        operation = emitsym(unless(params["operation"], "predict")),
+                        verbosity = unless(params["verbosity"], 0)))
             )),
 )
 
@@ -617,6 +949,13 @@ register_nodekind!(
             (;
                 out = inputs[:in] |> modelreports(; column = Symbol(params["column"]),
                     name = Symbol(params["name"]))
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:modelreports;
+                        column = emitsym(unless(params["column"], "model")),
+                        name = emitsym(unless(params["name"], "report"))))
             )),
 )
 
@@ -630,6 +969,13 @@ register_nodekind!(
             (;
                 out = inputs[:in] |>
                       CausalFrames.Acausal.lead(requiredcode(env, params, "offset"))
+            ),
+        # `lead` and `futurejoin` are exported from CausalFrames.Acausal, which the
+        # script imports by name; `settime` deliberately is not (see below).
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(:lead, emitrequiredcode(params, "offset")))
             )),
 )
 
@@ -644,6 +990,11 @@ register_nodekind!(
                     inputs[:right];
                     joinkwargs(env, params)...,
                 )
+            ),
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:left],
+                    opcall(:futurejoin, inputs[:right]; emitjoinkwargs(params)...))
             )),
 )
 
@@ -656,5 +1007,13 @@ register_nodekind!(
             (;
                 out = inputs[:in] |>
                       CausalFrames.Acausal.settime(requiredcode(env, params, "spec"))
+            ),
+        # Not exported even from the submodule, so that `using CausalFrames.Acausal`
+        # leaves the causal `settime` unambiguous: the script says it in full.
+        emit = (params, inputs) ->
+            (;
+                out = emitpipe(inputs[:in],
+                    opcall(qualified(:CausalFrames, :Acausal, :settime),
+                        emitrequiredcode(params, "spec")))
             )),
 )

@@ -107,6 +107,19 @@ vector of them for a variadic one, and `nothing` for an unconnected optional one
 function build end
 
 """
+    Loki.emit(kind::NodeKind, params::Dict{String,Any}, inputs::Dict{Symbol,Any})
+        -> NamedTuple
+
+The script expressions reproducing [`Loki.build`](@ref), one per output port —
+the same shape `build` returns, with an `Expr` in place of each
+`CausalPipeline`. `inputs[port]` is the `Symbol` a connected input is bound to
+in the script, a vector of them for a variadic port, and `nothing` for an
+unconnected optional one; source-text parameters travel as [`Loki.Code`](@ref).
+A kind that does not implement `emit` cannot be exported.
+"""
+function emit end
+
+"""
     Loki.validateparams(kind::NodeKind, params::AbstractDict) -> Dict{String,Any}
 
 Check `params` against the kind's parameters, raising an `ArgumentError` for an
@@ -136,13 +149,16 @@ iswrite(::NodeKind) = false
 # --- OpKind --------------------------------------------------------------------
 
 """
-    Loki.OpKind(name; category, build, inputs = Port[], outputs = [:out],
-                params = Param[], acausal = Symbol[], write = false, doc = "")
+    Loki.OpKind(name; category, build, emit = nothing, inputs = Port[],
+                outputs = [:out], params = Param[], acausal = Symbol[],
+                write = false, doc = "")
 
 A node kind described by data. `build(params, inputs, env)` receives the
 validated parameters (defaults filled in) and returns a `NamedTuple` with one
-pipeline per output; the outputs named in `acausal` look ahead in time; `write`
-marks a file sink; `category` groups the kind in the palette.
+pipeline per output; `emit(params, inputs)` returns the same shape as script
+expressions (see [`Loki.emit`](@ref)), and a kind without one cannot be
+exported; the outputs named in `acausal` look ahead in time; `write` marks a
+file sink; `category` groups the kind in the palette.
 """
 struct OpKind <: NodeKind
     name::String
@@ -152,11 +168,12 @@ struct OpKind <: NodeKind
     outputs::Vector{Symbol}
     params::Vector{Param}
     builder::Any
+    emitter::Any
     acausal::Vector{Symbol}
     write::Bool
 end
 
-function OpKind(name::AbstractString; category::AbstractString, build,
+function OpKind(name::AbstractString; category::AbstractString, build, emit = nothing,
     inputs = Port[], outputs = [:out], params = Param[], acausal = Symbol[],
     write::Bool = false, doc::AbstractString = "")
     ins = collect(Port, inputs)
@@ -170,8 +187,8 @@ function OpKind(name::AbstractString; category::AbstractString, build,
         throw(ArgumentError("node kind $name has duplicate parameters"))
     acs = collect(Symbol, acausal)
     acs ⊆ outs || throw(ArgumentError("node kind $name: acausal ports must be outputs"))
-    return OpKind(String(name), String(category), String(doc), ins, outs, ps, build, acs,
-        write)
+    return OpKind(String(name), String(category), String(doc), ins, outs, ps, build, emit,
+        acs, write)
 end
 
 inputs(k::OpKind) = k.inputs
@@ -186,6 +203,24 @@ function build(k::OpKind, params::AbstractDict, inputs::AbstractDict, env)
             its outputs $(k.outputs)"))
     return out
 end
+
+function emit(k::OpKind, params::AbstractDict, inputs::AbstractDict)
+    k.emitter === nothing &&
+        throw(ArgumentError("node kind $(k.name) cannot be exported: it has no emit"))
+    out = k.emitter(validateparams(k, params), inputs)
+    (out isa NamedTuple && collect(keys(out)) == k.outputs) || throw(
+        ArgumentError("node kind $(k.name) emitted $(typeof(out)), not a NamedTuple of \
+            its outputs $(k.outputs)"))
+    return out
+end
+
+"""
+    Loki.canemit(kind::NodeKind) -> Bool
+
+Whether the kind implements [`Loki.emit`](@ref), and so can be exported.
+"""
+canemit(k::OpKind) = k.emitter !== nothing
+canemit(k::NodeKind) = hasmethod(emit, Tuple{typeof(k),Dict{String,Any},Dict{Symbol,Any}})
 
 function validateparams(k::OpKind, params::AbstractDict)
     out = stringkeys(params)
