@@ -9,6 +9,7 @@ using Random: Xoshiro, randn
 import HypothesisTests as HT
 import StatsBase
 import StatsFuns
+import StateSpaceModels as SSM
 using Statistics: Statistics
 
 const DIAGCTX = Context(0, 101)
@@ -374,5 +375,148 @@ end
 
         one = CausalFrame(Context(0, 2), DataFrame(time = [1], y = [1.0]))
         @test Loki.qqplot(one, :y).data["line"] === nothing
+    end
+end
+
+@testset "fits, forecasts and the residual panel" begin
+    rng = Xoshiro(41)
+    y = zeros(240)
+    for t in 2:240
+        y[t] = 0.65 * y[t-1] + randn(rng)
+    end
+    ctx = Context(0, 241)
+    src = readtable(DataFrame(time = 1:240, y = y))
+    models = load(ctx, src |> fitarma(:y; order = (1, 0, 1)))
+    insample = load(ctx, src |> Loki.Acausal.insample(FitARMA(:y; order = (1, 0, 1))))
+    fm = only(DataFrame(models).model)
+
+    @testset "fitreport" begin
+        r = fitreport(models)
+        @test r.summary["status"] == "ok"
+        @test r.summary["order"] == [1, 0, 1]
+        @test r.summary["nobs"] == 240
+        @test r.summary["aic"] ≈ fm.aic
+        @test sort(collect(keys(r.summary["coefficients"]))) == sort(fm.names)
+        @test r.summary["coefficients"][fm.names[1]] ≈ fm.coefs[1]
+        @test isempty(r.warnings)
+
+        # An in-sample stream has no model column, because applyarma drops it.
+        none = fitreport(insample)
+        @test none.summary["models"] == 0
+        @test occursin("no column", only(none.warnings))
+
+        # A fit that failed reports the message instead of raising. A series with
+        # no observation at all is the reliable way to get one: too few rows is
+        # not, since StateSpaceModels will happily fit three.
+        blank = load(Context(0, 6),
+            readtable(DataFrame(time = 1:5,
+                y = Vector{Union{Missing,Float64}}(missing, 5))) |>
+            fitarma(:y; order = (1, 0, 0)))
+        f = fitreport(blank)
+        @test f.summary["status"] == "failed"
+        @test !isempty(f.warnings)
+        @test !occursin("NaN", JSON3.write(f))
+    end
+
+    @testset "forecastfan" begin
+        r = forecastfan(insample, :y; models = models, h = 6)
+        @test length(r.data["mean"]) == 6
+        @test r.data["time"] == [241, 242, 243, 244, 245, 246]
+        @test length(r.data["intervals"]) == 2
+        # The fan must agree with StateSpaceModels' own forecast from the same
+        # fitted hyperparameters and the same non-steady filter.
+        m = SSM.SARIMA(copy(y); order = fm.order, seasonal_order = fm.seasonal_order,
+            include_mean = fm.include_mean)
+        m.hyperparameters = deepcopy(fm.model.hyperparameters)
+        reference = SSM.forecast(m, 6;
+            filter = SSM.UnivariateKalmanFilter(copy(fm.a1), copy(fm.P1), 0, -1.0))
+        @test r.data["mean"] ≈ [only(e) for e in reference.expected_value]
+        # A wider interval contains a narrower one.
+        narrow, wide = r.data["intervals"][1], r.data["intervals"][2]
+        @test all(wide["lower"] .<= narrow["lower"])
+        @test all(wide["upper"] .>= narrow["upper"])
+        @test r.data["intervals"][2]["upper"][1] ≈ r.data["mean"][1] +
+                                                   1.959963984540054 * r.summary["sd"][1] rtol = 1e-9
+        @test length(forecastfan(insample, :y; models, h = 6, history = 20).data["history"]["values"]) ==
+              20
+
+        # Without a model there is nothing to forecast, and it says which port has one.
+        bare = forecastfan(insample, :y; h = 3)
+        @test isempty(bare.data["mean"])
+        @test occursin("models", only(bare.warnings))
+    end
+
+    @testset "the residual panel" begin
+        r = Loki.residuals(insample, :y_residual; dof = 2)
+        @test r.kind === :residuals
+        @test sort(collect(keys(r.panels))) ==
+              ["acf", "fitted", "histogram", "ljungbox", "pacf", "qqplot", "series"]
+        @test r.summary["residual"] == "y_residual"
+        @test r.summary["dof"] == 2
+        @test r.summary["outofsample"] === nothing
+        @test r.summary["insample"]["n"] == r.panels["acf"].summary["n"]
+        @test r.summary["whitenoise"] == true       # the model is the one that made it
+        @test r.panels["ljungbox"].summary["dof"] == 2
+        @test length(r.panels["fitted"].data["series"]) == 2
+        # The distribution panels use the standardized residual when there is one.
+        @test r.panels["qqplot"].summary["column"] == "y_stdresidual"
+
+        # The series it came from resolves to the same panel as the residual does.
+        @test samediagnostic(Loki.residuals(insample, :y; dof = 2), r)
+        @test_throws ArgumentError Loki.residuals(insample, :nope)
+        @test_throws ArgumentError Loki.residuals(models, :y)
+    end
+
+    @testset "the panel splits at the fit window" begin
+        narrow = load(ctx,
+            src |> Loki.Acausal.insample(FitARMA(:y; order = (1, 0, 1));
+                fitcontext = Context(0, 121)))
+        r = Loki.residuals(narrow, :y; fitstop = Context(0, 121), dof = 2)
+        @test r.summary["fitstop"] == 121
+        @test r.summary["insample"]["n"] == 120
+        @test r.summary["outofsample"]["n"] == 120
+        # The correlogram is over the fitted rows only; the series panel is over all.
+        @test r.panels["acf"].summary["n"] == 120
+        @test r.panels["series"].summary["series"]["y_residual"]["n"] == 240
+        @test r.data["fitstop"] == 121
+
+        # A `fitstop` before every row leaves nothing in sample, and says so.
+        after = Loki.residuals(narrow, :y; fitstop = 0, dof = 2)
+        @test after.summary["insample"] === nothing
+        @test any(w -> occursin("out of sample", w), after.warnings)
+    end
+
+    @testset "the dispatcher" begin
+        @test Loki.diagnostics() == ["acf", "adf", "fit", "forecast", "histogram",
+            "ljungbox", "pacf", "preview", "qqplot", "residuals", "series"]
+        # Everything arrives as a string from a query string, and is coerced here.
+        a = Loki.diagnostic(insample, "acf";
+            params = Dict("column" => "y_residual", "lags" => "12", "level" => "0.9"))
+        @test a.summary["lags"] == 12
+        @test a.data["level"] == 0.9
+        lb = Loki.diagnostic(insample, "ljungbox";
+            params = Dict("column" => "y_residual", "lags" => "10,20", "dof" => "2"))
+        @test sort(collect(keys(lb.summary["pvalues"]))) == ["10", "20"]
+        @test length(Loki.diagnostic(insample, "series";
+            params = Dict("columns" => "y,y_fitted")).data["series"]) == 2
+        @test Loki.diagnostic(insample, "preview";
+            params = Dict("offset" => "3", "limit" => "2")).data["total"] == 240
+        @test Loki.diagnostic(models, "fit"; params = Dict()).summary["order"] == [1, 0, 1]
+        @test Loki.diagnostic(insample, "forecast";
+            params = Dict("column" => "y", "h" => "4", "models" => models,
+                "levels" => "0.5,0.9")).summary["levels"] == [0.5, 0.9]
+
+        keyed = load(Context(0, 21),
+            readtable(DataFrame(time = 1:20, k = repeat(["a", "b"], 10),
+                y = Float64.(1:20))))
+        @test Loki.diagnostic(keyed, "preview";
+            params = Dict("key" => "k=a", "limit" => "50")).data["total"] == 10
+
+        @test_throws ArgumentError Loki.diagnostic(insample, "nope")
+        @test_throws ArgumentError Loki.diagnostic(insample, "acf")
+        @test_throws ArgumentError Loki.diagnostic(insample, "acf";
+            params = Dict("column" => "y", "lags" => "many"))
+        @test_throws ArgumentError Loki.diagnostic(keyed, "preview";
+            params = Dict("key" => "nonsense"))
     end
 end

@@ -31,6 +31,15 @@
         load(Context(0, 41),
             src |> lags(:y, 1) |> Acausal.insample(LinearRegression(:y_lag_1, :y)))
 
+        # The diagnostics a panel opens with, so the first one a user asks for
+        # does not cost them StatsBase's and HypothesisTests' compilation.
+        frame = load(Context(0, 41), src |> ema(:y; span = 5))
+        acf(frame, :y; lags = 5)
+        pacf(frame, :y; lags = 5)
+        ljungbox(frame, :y; lags = 5, dof = 0)
+        Loki.seriesplot(frame, :y)
+        Loki.preview(frame; limit = 5)
+
         # A headless session: a graph built from node kinds, compiled, and
         # evaluated synchronously by freeze! (runs spawn tasks, which a
         # precompile workload should not leave behind).

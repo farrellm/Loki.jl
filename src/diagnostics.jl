@@ -82,6 +82,12 @@ jsoncell(x) = sprint(show, x; context = :compact => true)
 timenumber(t::Real) = Float64(t)
 timenumber(t::Union{Dates.Date,Dates.DateTime,Dates.Time}) = Float64(Dates.value(t))
 
+# A warning written across several source lines carries the indentation with it —
+# Julia's line continuation drops the newline and keeps the spaces — and these
+# are shown in a panel, so the runs are collapsed on the way in.
+pushwarning!(warnings::Vector{String}, message::AbstractString) =
+    push!(warnings, replace(strip(message), r"\s+" => " "))
+
 # --- extraction ----------------------------------------------------------------
 
 function schemaindex(sch::Tables.Schema, name::Symbol)
@@ -238,7 +244,7 @@ function spacingwarnings!(warnings::Vector{String}, summary::Dict{String,Any},
     s = spacing(times)
     s.regular && return warnings
     fix = "intervalize(clock($(spelldelta(s.delta))), Last($(repr(column))))"
-    push!(warnings, "time is not evenly spaced, and this diagnostic assumes it is; \
+    pushwarning!(warnings, "time is not evenly spaced, and this diagnostic assumes it is; \
         resample first with $fix")
     summary["suggestion"] = fix
     return warnings
@@ -442,7 +448,7 @@ function chooselags(requested, available::Integer, warnings::Vector{String}, wha
     wanted = requested === nothing ? 40 : Int(requested)
     wanted >= 1 || throw(ArgumentError("$what needs at least one lag, got $wanted"))
     wanted <= available && return wanted, false
-    push!(warnings, "$what was asked for $wanted lags but this window supports \
+    pushwarning!(warnings, "$what was asked for $wanted lags but this window supports \
         $available; showing $available")
     return available, true
 end
@@ -459,7 +465,7 @@ function correlogram(kind::Symbol, frame::CausalFrame, column::Symbol, lags, key
     n = length(v.values)
     available = kind === :acf ? maxacflag(n) : maxpacflag(n)
     if available < 1
-        push!(warnings, "too few rows for $(kind): $n")
+        pushwarning!(warnings, "too few rows for $(kind): $n")
         return DiagnosticResult(kind;
             data = Dict{String,Any}("lags" => Int[], "values" => Any[],
                 "band" => nothing, "level" => Float64(level)),
@@ -472,7 +478,7 @@ function correlogram(kind::Symbol, frame::CausalFrame, column::Symbol, lags, key
         err isa InterruptException && rethrow()
         # A singular window — a constant series, a perfectly periodic one — is a
         # property of the data, not a bug. Report it where the user can see it.
-        push!(warnings, "$(kind) could not be computed for this window: \
+        pushwarning!(warnings, "$(kind) could not be computed for this window: \
             $(sprint(showerror, err))")
         fill(NaN, kind === :acf ? k + 1 : k)
     end
@@ -583,7 +589,7 @@ function ljungbox(frame::CausalFrame, column::Union{Symbol,AbstractString};
         found = armadof(frame; column = modelcolumn)
         found === nothing ? (0, "none") : (found, "model")
     end
-    source == "none" && push!(warnings, "no model column in this frame, so the test \
+    source == "none" && pushwarning!(warnings, "no model column in this frame, so the test \
         gives up no degrees of freedom; pass dof if these are residuals")
     summary["dof"] = d
     summary["dofsource"] = source
@@ -594,18 +600,18 @@ function ljungbox(frame::CausalFrame, column::Union{Symbol,AbstractString};
     pvalues = Dict{String,Any}()
     for k in wanted
         if k <= d
-            push!(warnings, "skipping $k lags: the test needs more lags than the $d \
+            pushwarning!(warnings, "skipping $k lags: the test needs more lags than the $d \
                 degrees of freedom it gives up")
             continue
         elseif k >= n
-            push!(warnings, "skipping $k lags: the window has $n rows")
+            pushwarning!(warnings, "skipping $k lags: the window has $n rows")
             continue
         end
         t = try
             HT.LjungBoxTest(v.values, k, d)
         catch err
             err isa InterruptException && rethrow()
-            push!(warnings, "skipping $k lags: $(sprint(showerror, err))")
+            pushwarning!(warnings, "skipping $k lags: $(sprint(showerror, err))")
             continue
         end
         p = HT.pvalue(t)
@@ -647,10 +653,10 @@ function adftest(frame::CausalFrame, column::Union{Symbol,AbstractString};
         HT.ADFTest(v.values, deterministic, k)
     catch err
         err isa InterruptException && rethrow()
-        push!(warnings, "the ADF test could not be computed: $(sprint(showerror, err))")
+        pushwarning!(warnings, "the ADF test could not be computed: $(sprint(showerror, err))")
         nothing
     end
-    n < 8 && push!(warnings, "too few rows for an ADF test: $n")
+    n < 8 && pushwarning!(warnings, "too few rows for an ADF test: $n")
     if result === nothing
         summary["lag"] = k
         summary["statistic"] = nothing
@@ -705,7 +711,7 @@ function histogram(frame::CausalFrame, column::Union{Symbol,AbstractString};
     summary["kurtosis"] = n > 3 ? jsonnumber(StatsBase.kurtosis(values)) : nothing
     summary["median"] = n > 0 ? jsonnumber(Statistics.median(values)) : nothing
     if n == 0
-        push!(warnings, "nothing to plot: every row of $(repr(String(col))) is missing")
+        pushwarning!(warnings, "nothing to plot: every row of $(repr(String(col))) is missing")
         return DiagnosticResult(:histogram;
             data = Dict{String,Any}("edges" => Any[], "counts" => Int[],
                 "density" => Any[], "normal" => nothing), summary, warnings)
@@ -758,7 +764,7 @@ function qqplot(frame::CausalFrame, column::Union{Symbol,AbstractString};
     summary["mean"] = jsonnumber(m.mean)
     summary["std"] = jsonnumber(m.std)
     if n < 2
-        push!(warnings, "too few rows for a QQ plot: $n")
+        pushwarning!(warnings, "too few rows for a QQ plot: $n")
         summary["correlation"] = nothing
         return DiagnosticResult(:qqplot;
             data = Dict{String,Any}("theoretical" => Any[], "sample" => Any[],
@@ -774,4 +780,426 @@ function qqplot(frame::CausalFrame, column::Union{Symbol,AbstractString};
             "sample" => jsonnumbers(view(sample, idx)),
             "line" => Dict{String,Any}("intercept" => jsonnumber(m.mean),
                 "slope" => jsonnumber(sd))), summary, warnings)
+end
+
+# --- fitted models -------------------------------------------------------------
+
+"""
+    fitreport(frame::CausalFrame; column = :model, key = nothing)
+        -> Loki.DiagnosticResult
+
+What a fit came out as: a [`FittedARMA`](@ref)'s specification, fitted
+hyperparameters by name, information criteria, observation count and status —
+and, for a failed fit, the message rather than an exception.
+
+A model column holding something else (an MLJ model, whose report is the
+`modelreports` operator's job) is reported as the text it shows as, with a
+warning.
+"""
+function fitreport(frame::CausalFrame; column = :model, key = nothing)
+    col = Symbol(column)
+    warnings = String[]
+    summary = basesummary(frame, col, key)
+    fitted = if col in Tables.schema(frame).names
+        [m for m in getproperty(columnvectors(frame, col; key), col) if m !== missing]
+    else
+        pushwarning!(warnings, "this frame has no column $(repr(String(col))); a fit node's             model port is where the models are")
+        Any[]
+    end
+    summary["models"] = length(fitted)
+    if isempty(fitted)
+        isempty(warnings) && pushwarning!(warnings, "no model in column $(repr(String(col)))")
+        return DiagnosticResult(:fitreport; data = copy(summary), summary, warnings)
+    end
+    fm = last(fitted)
+    if !(fm isa FittedARMA)
+        pushwarning!(warnings, "column $(repr(String(col))) holds a $(typeof(fm)), not a \
+            FittedARMA; an MLJ model's report comes from the modelreports operator")
+        summary["status"] = "unknown"
+        summary["model"] = jsoncell(fm)
+        return DiagnosticResult(:fitreport; data = copy(summary), summary, warnings)
+    end
+    fm.status === :ok ||
+        pushwarning!(warnings, "the fit failed: $(fm.message)")
+    summary["status"] = String(fm.status)
+    summary["message"] = fm.message
+    summary["order"] = collect(fm.order)
+    summary["seasonal_order"] = collect(fm.seasonal_order)
+    summary["include_mean"] = fm.include_mean
+    summary["coefficients"] =
+        Dict{String,Any}(zip(fm.names, jsonnumbers(fm.coefs)))
+    summary["loglik"] = jsonnumber(fm.loglik)
+    summary["aic"] = jsonnumber(fm.aic)
+    summary["aicc"] = jsonnumber(fm.aicc)
+    summary["bic"] = jsonnumber(fm.bic)
+    summary["nobs"] = fm.nobs
+    return DiagnosticResult(:fitreport; data = copy(summary), summary, warnings)
+end
+
+# The fitted models in a column, or none when the frame has no such column —
+# which is the usual case on an in-sample stream, since `applyarma` drops it.
+function fittedmodels(frame::CausalFrame, column::Symbol, key)
+    column in Tables.schema(frame).names || return FittedARMA[]
+    return FittedARMA[m for m in getproperty(columnvectors(frame, column; key), column)
+                      if m isa FittedARMA]
+end
+
+# A `SARIMA` over `ys` carrying `fm`'s fitted hyperparameters. StateSpaceModels
+# refuses to filter an unfitted model and cannot fit one with every
+# hyperparameter fixed, so the fitted values are copied across — which is what
+# its own `forecast` does.
+function refitted(fm::FittedARMA, ys::Vector{Float64})
+    m = SSM.SARIMA(copy(ys); order = fm.order, seasonal_order = fm.seasonal_order,
+        include_mean = fm.include_mean)
+    m.hyperparameters = deepcopy(fm.model.hyperparameters)
+    return m
+end
+
+# The steady-state shortcut freezes the covariance once it looks settled, which
+# leaves the innovation variance stale after a gap. `ARMAFilter` takes no such
+# shortcut, so neither does the forecast that has to agree with it.
+nonsteady(fm::FittedARMA) =
+    SSM.UnivariateKalmanFilter(copy(fm.a1), copy(fm.P1), 0, -1.0)
+
+# The `h` times after the last one, spaced as the series is.
+function futuretimes(times::AbstractVector, h::Integer)
+    (isempty(times) || h < 1) && return similar(times, 0)
+    step = spacing(times).delta
+    step === nothing && return similar(times, 0)
+    last_ = last(times)
+    return typeof(last_)[last_+i*step for i in 1:h]
+end
+
+"""
+    forecastfan(frame::CausalFrame, column; h = 12, models = nothing,
+                model = :model, key = nothing, levels = (0.8, 0.95),
+                history = 200) -> Loki.DiagnosticResult
+
+`h` steps ahead from the end of the series, with prediction intervals at each of
+`levels` — the fan chart. The last `history` observed rows come back with it, so
+the plot has something to fan out from.
+
+The model comes from `models` — the frame a fit node's `model` port loaded — or
+from a [`FittedARMA`](@ref) column in `frame` itself. It usually has to be
+`models`: [`applyarma`](@ref) drops the model column, so an in-sample stream
+carries no model to forecast with.
+"""
+function forecastfan(frame::CausalFrame, column::Union{Symbol,AbstractString};
+    h::Integer = 12, models = nothing, model = :model, key = nothing,
+    levels = (0.8, 0.95), history::Integer = 200)
+    col = Symbol(column)
+    warnings = String[]
+    summary = basesummary(frame, col, key)
+    ls = Float64[Float64(l) for l in (levels isa Real ? (levels,) : levels)]
+    summary["h"] = Int(h)
+    summary["levels"] = ls
+    v = numericvalues(frame, col; key)
+    summary["n"] = length(v.values)
+    summary["missing"] = v.dropped
+
+    source = models === nothing ? frame : models
+    fitted = fittedmodels(source, Symbol(model), key)
+    empty = Dict{String,Any}("history" => Dict{String,Any}("time" => Any[],
+            "values" => Any[]), "time" => Any[], "mean" => Any[],
+        "intervals" => Any[])
+    if isempty(fitted)
+        pushwarning!(warnings, "no fitted model to forecast with: pass the fit node's \
+            model port as `models`, since applyarma drops the model column")
+        return DiagnosticResult(:forecastfan; data = empty, summary, warnings)
+    end
+    fm = last(fitted)
+    summary["model"] = fitreport(source; column = Symbol(model), key).summary
+    if fm.status !== :ok || fm.model === nothing
+        pushwarning!(warnings, "the model failed to fit, so there is nothing to \
+            forecast: $(fm.message)")
+        return DiagnosticResult(:forecastfan; data = empty, summary, warnings)
+    end
+    (h >= 1 && !isempty(v.values)) || return DiagnosticResult(:forecastfan;
+        data = empty, summary,
+        warnings = pushwarning!(warnings, "nothing to forecast from"))
+
+    fc = try
+        SSM.forecast(refitted(fm, v.values), Int(h); filter = nonsteady(fm))
+    catch err
+        err isa InterruptException && rethrow()
+        pushwarning!(warnings, "the forecast could not be computed: $(sprint(showerror, err))")
+        return DiagnosticResult(:forecastfan; data = empty, summary, warnings)
+    end
+    means = Float64[only(e) for e in fc.expected_value]
+    sds = Float64[sqrt(max(only(c), 0.0)) for c in fc.covariance]
+    times = futuretimes(v.times, h)
+    isempty(times) && pushwarning!(warnings, "the series is too short or too irregular to \
+        place the forecast in time")
+    keep = max(length(v.values) - history + 1, 1):length(v.values)
+    intervals = Any[Dict{String,Any}("level" => l,
+        "lower" => jsonnumbers(means .- zscore(l) .* sds),
+        "upper" => jsonnumbers(means .+ zscore(l) .* sds)) for l in ls]
+    summary["mean"] = jsonnumbers(means)
+    summary["sd"] = jsonnumbers(sds)
+    return DiagnosticResult(:forecastfan;
+        data = Dict{String,Any}(
+            "history" => Dict{String,Any}("time" => jsontimes(view(v.times, keep)),
+                "values" => jsonnumbers(view(v.values, keep))),
+            "time" => jsontimes(times), "mean" => jsonnumbers(means),
+            "intervals" => intervals), summary, warnings)
+end
+
+# --- the residual panel --------------------------------------------------------
+
+# The columns an apply operator appends, from either the residual column itself
+# or the series it came from.
+function residualcolumns(frame::CausalFrame, column::Symbol)
+    names = Set(Tables.schema(frame).names)
+    base = endswith(String(column), "_residual") ?
+           Symbol(chop(String(column); tail = length("_residual"))) : column
+    residual = Symbol(base, :_residual)
+    residual in names || throw(ArgumentError("no residual column for \
+        $(repr(String(column))): expected $(repr(String(residual))). The frame has \
+        $(join(repr.([String(n) for n in names if endswith(String(n), "_residual")]),
+            ", "))"))
+    pick(name) = name in names ? name : nothing
+    return (; base, residual, stdresidual = pick(Symbol(base, :_stdresidual)),
+        fitted = pick(Symbol(base, :_fitted)), actual = pick(base))
+end
+
+# The rows a whole-window fit was fitted on, and the rows after it. `fitstop` is
+# a time or a `Context` whose `stop` splits them; without one, every row is in
+# sample, which is what a fit over the run's own context means.
+function splitatfit(frame::CausalFrame, fitstop)
+    stop = fitstop isa Context ? fitstop.stop : fitstop
+    ctx = context(frame)
+    stop === nothing && return (frame, nothing)
+    df = DataFrame(frame)
+    inside = df.time .< stop
+    all(inside) && return (frame, nothing)
+    any(inside) || return (nothing, frame)
+    return (CausalFrame(ctx, df[inside, :]), CausalFrame(ctx, df[.!inside, :]))
+end
+
+function halfsummary(frame::Union{Nothing,CausalFrame}, residual::Symbol, key)
+    frame === nothing && return nothing
+    v = numericvalues(frame, residual; key)
+    return seriessummary(v.values, v.dropped)
+end
+
+"""
+    Loki.residuals(frame::CausalFrame, column; key = nothing, lags = 40,
+                   dof = nothing, fitstop = nothing, level = 0.95,
+                   maxpoints = 2000) -> Loki.DiagnosticResult
+
+The residual panel: everything the Box–Jenkins identification loop asks of a
+fit, in one result. `column` is the residual column or the series it came from.
+Its `panels` are
+
+| Panel | What it shows |
+|---|---|
+| `series` | the residuals over time |
+| `fitted` | the fitted values over the actual series |
+| `acf`, `pacf` | the residual correlogram, over the fitted rows |
+| `ljungbox` | the test at 10, 20 and 40 lags, with `dof` given up |
+| `histogram`, `qqplot` | the residual distribution against a normal |
+
+`dof` is the model's parameters, which the test must give up: see
+[`ljungbox`](@ref). `fitstop` is the fit context's `stop` when the fit was
+narrower than the window — rows before it carry in-sample residuals, rows after
+it the same model applied out of sample, and the summary reports the two
+separately.
+"""
+function residuals(frame::CausalFrame, column::Union{Symbol,AbstractString};
+    key = nothing, lags = nothing, dof = nothing, fitstop = nothing,
+    level::Real = 0.95, maxpoints::Integer = 2000)
+    cols = residualcolumns(frame, Symbol(column))
+    warnings = String[]
+    summary = basesummary(frame, cols.residual, key)
+    d = dof === nothing ? something(armadof(frame), 0) : Int(dof)
+
+    inside, outside = splitatfit(frame, fitstop)
+    fitted = inside === nothing ? frame : inside
+    inside === nothing && pushwarning!(warnings, "no row falls inside the fit window, so \
+        every residual here is out of sample")
+    shape = cols.stdresidual === nothing ? cols.residual : cols.stdresidual
+
+    panels = Dict{String,DiagnosticResult}(
+        "series" => seriesplot(frame, cols.residual; key, maxpoints),
+        "acf" => acf(fitted, cols.residual; lags, key, level),
+        "pacf" => pacf(fitted, cols.residual; lags, key, level),
+        "ljungbox" => ljungbox(fitted, cols.residual; lags = [10, 20, 40], dof = d, key),
+        "histogram" => histogram(fitted, shape; key),
+        "qqplot" => qqplot(fitted, shape; key))
+    if cols.fitted !== nothing && cols.actual !== nothing
+        panels["fitted"] = seriesplot(frame, cols.actual, cols.fitted; key, maxpoints)
+    else
+        pushwarning!(warnings, "no fitted-value column beside $(repr(String(cols.residual)))")
+    end
+
+    lb = panels["ljungbox"]
+    summary["residual"] = String(cols.residual)
+    summary["dof"] = d
+    summary["dofsource"] = lb.summary["dofsource"]
+    summary["fitstop"] = fitstop === nothing ? nothing :
+                         jsontime(fitstop isa Context ? fitstop.stop : fitstop)
+    summary["insample"] = halfsummary(inside, cols.residual, key)
+    summary["outofsample"] = halfsummary(outside, cols.residual, key)
+    summary["ljungbox"] = lb.summary["pvalues"]
+    summary["acf_significant"] = panels["acf"].summary["significant"]
+    summary["whitenoise"] = lb.summary["whitenoise"]
+    for panel in values(panels)
+        append!(warnings, panel.warnings)
+    end
+    return DiagnosticResult(:residuals;
+        data = Dict{String,Any}("residual" => String(cols.residual),
+            "fitstop" => summary["fitstop"], "dof" => d),
+        summary, warnings = unique!(warnings), panels)
+end
+
+# --- the dispatcher ------------------------------------------------------------
+#
+# One name to one diagnostic, with the coercion a query string needs. The server
+# and the MCP `get_diagnostic` tool both come through here, so neither has to
+# know the argument list of eleven functions.
+
+querymissing(params::AbstractDict, name::AbstractString) =
+    !haskey(params, name) || params[name] === nothing ||
+    (params[name] isa AbstractString && isempty(params[name]))
+
+function queryvalue(params::AbstractDict, name::AbstractString, parse, default)
+    querymissing(params, name) && return default
+    v = params[name]
+    try
+        return parse(v)
+    catch err
+        err isa InterruptException && rethrow()
+        throw(ArgumentError("$name is not $(lowercase(string(parse))): $(repr(v))"))
+    end
+end
+
+queryint(params, name, default = nothing) =
+    queryvalue(params, name, v -> v isa Integer ? Int(v) : parse(Int, String(v)), default)
+queryfloat(params, name, default = nothing) =
+    queryvalue(params, name,
+        v -> v isa Real ? Float64(v) : parse(Float64, String(v)), default)
+querybool(params, name, default = nothing) =
+    queryvalue(params, name,
+        v -> v isa Bool ? v : parse(Bool, lowercase(String(v))), default)
+querysymbol(params, name, default = nothing) =
+    querymissing(params, name) ? default : Symbol(params[name])
+querystring(params, name, default = nothing) =
+    querymissing(params, name) ? default : String(params[name])
+
+# One lag count, or several: `lags=20` and `lags=10,20,40` both read.
+function querylags(params, name = "lags", default = nothing)
+    querymissing(params, name) && return default
+    v = params[name]
+    v isa Integer && return Int(v)
+    v isa AbstractVector && return Int[Int(x) for x in v]
+    parts = split(String(v), ','; keepempty = false)
+    length(parts) == 1 && return parse(Int, strip(only(parts)))
+    return Int[parse(Int, strip(p)) for p in parts]
+end
+
+function querylevels(params, name = "levels", default = (0.8, 0.95))
+    querymissing(params, name) && return default
+    v = params[name]
+    v isa Real && return (Float64(v),)
+    v isa AbstractVector && return Tuple(Float64(x) for x in v)
+    return Tuple(parse(Float64, strip(p))
+                 for p in split(String(v), ','; keepempty = false))
+end
+
+function querycolumns(params, name = "columns", default = nothing)
+    querymissing(params, name) && return default
+    v = params[name]
+    v isa AbstractVector && return Symbol[Symbol(c) for c in v]
+    return Symbol[Symbol(strip(c)) for c in split(String(v), ','; keepempty = false)]
+end
+
+# A key selector as a query string: `key=sym=AAPL,venue=XNAS`. The values stay
+# strings, which `keymatches` compares against the shown cell.
+function querykey(params, name = "key")
+    querymissing(params, name) && return nothing
+    v = params[name]
+    v isa AbstractDict && return keypairs(collect(pairs(v)))
+    v isa Union{Pair,AbstractVector} && return keypairs(v)
+    out = Pair{Symbol,Any}[]
+    for part in split(String(v), ','; keepempty = false)
+        eq = findfirst('=', part)
+        eq === nothing &&
+            throw(ArgumentError("a key selector is column=value, got $(repr(part))"))
+        push!(out, Symbol(strip(part[1:(eq-1)])) => String(strip(part[(eq+1):end])))
+    end
+    return out
+end
+
+# The column a diagnostic is about; the ones that need one say so by name.
+function querycolumn(params)
+    querymissing(params, "column") &&
+        throw(ArgumentError("this diagnostic needs a column"))
+    return Symbol(params["column"])
+end
+
+# `series` takes either one `column` or a list of them, and `columns` wins. This
+# is a function rather than `something(...)` at the call site, which would
+# evaluate — and so raise from — the branch it is not taking.
+function seriescolumns(params::AbstractDict)
+    cols = querycolumns(params)
+    cols === nothing && return Symbol[querycolumn(params)]
+    return cols
+end
+
+const DIAGNOSTICKINDS = Dict{String,Any}(
+    "series" => (frame, p) -> seriesplot(frame, seriescolumns(p)...;
+        key = querykey(p), maxpoints = queryint(p, "maxpoints", 2000)),
+    "preview" => (frame, p) -> preview(frame; offset = queryint(p, "offset", 0),
+        limit = queryint(p, "limit", 100), columns = querycolumns(p),
+        key = querykey(p)),
+    "acf" => (frame, p) -> acf(frame, querycolumn(p); lags = queryint(p, "lags"),
+        key = querykey(p), level = queryfloat(p, "level", 0.95)),
+    "pacf" => (frame, p) -> pacf(frame, querycolumn(p); lags = queryint(p, "lags"),
+        key = querykey(p), level = queryfloat(p, "level", 0.95)),
+    "histogram" => (frame, p) -> histogram(frame, querycolumn(p); key = querykey(p),
+        bins = queryint(p, "bins")),
+    "qqplot" => (frame, p) -> qqplot(frame, querycolumn(p); key = querykey(p),
+        maxpoints = queryint(p, "maxpoints", 2000)),
+    "adf" => (frame, p) -> adftest(frame, querycolumn(p); key = querykey(p),
+        deterministic = querysymbol(p, "deterministic", :constant),
+        lag = queryint(p, "lag")),
+    "ljungbox" => (frame, p) -> ljungbox(frame, querycolumn(p); lags = querylags(p),
+        dof = queryint(p, "dof"), key = querykey(p),
+        modelcolumn = querysymbol(p, "modelcolumn")),
+    "fit" => (frame, p) -> fitreport(frame; column = querysymbol(p, "column", :model),
+        key = querykey(p)),
+    "forecast" => (frame, p) -> forecastfan(frame, querycolumn(p);
+        h = queryint(p, "h", 12), models = get(p, "models", nothing),
+        model = querysymbol(p, "model", :model), key = querykey(p),
+        levels = querylevels(p), history = queryint(p, "history", 200)),
+    "residuals" => (frame, p) -> residuals(frame, querycolumn(p); key = querykey(p),
+        lags = queryint(p, "lags"), dof = queryint(p, "dof"),
+        fitstop = get(p, "fitstop", nothing),
+        level = queryfloat(p, "level", 0.95),
+        maxpoints = queryint(p, "maxpoints", 2000)))
+
+"""
+    Loki.diagnostics() -> Vector{String}
+
+The names [`Loki.diagnostic`](@ref) accepts, sorted.
+"""
+diagnostics() = sort!(collect(keys(DIAGNOSTICKINDS)))
+
+"""
+    Loki.diagnostic(frame::CausalFrame, kind; params = Dict()) -> Loki.DiagnosticResult
+
+Run the diagnostic named `kind` over `frame`, taking its arguments from `params`
+— a dictionary of JSON-like or string values, as a query string or an MCP tool
+call supplies them. `"column"`, `"lags"`, `"key"` and the rest are coerced to
+what the diagnostic wants, so the HTTP layer and the MCP layer share one
+argument list instead of writing two.
+
+`Loki.diagnostics()` lists the names.
+"""
+function diagnostic(frame::CausalFrame, kind::AbstractString;
+    params::AbstractDict = Dict{String,Any}())
+    f = get(DIAGNOSTICKINDS, String(kind), nothing)
+    f === nothing && throw(ArgumentError("unknown diagnostic $(repr(String(kind))); \
+        there is $(join(diagnostics(), ", "))"))
+    return f(frame, Dict{String,Any}(String(k) => v for (k, v) in pairs(params)))
 end

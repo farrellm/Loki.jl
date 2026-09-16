@@ -86,6 +86,21 @@ Loki.histogram
 Loki.qqplot
 ```
 
+### Fits and residuals
+
+```@docs
+fitreport
+forecastfan
+Loki.residuals
+```
+
+### Running one by name
+
+```@docs
+Loki.diagnostic
+Loki.diagnostics
+```
+
 ## Export
 
 ```@docs

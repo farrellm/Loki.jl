@@ -36,7 +36,7 @@ import StateSpaceModels as SSM
 
 export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
     boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia,
-    acf, pacf, adftest, ljungbox
+    acf, pacf, adftest, ljungbox, fitreport, forecastfan
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")
