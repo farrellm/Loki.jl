@@ -54,3 +54,38 @@ Loki.status(s, fit)                      # :ok
 Loki.result(s, fit; port = :insample)    # the frame, with close_log_diff_residual
 Loki.isacausal(s, fit; port = :insample) # true: residuals over the fit window
 ```
+
+## Export and save
+
+A session is not a black box. It exports as a plain Julia script that runs
+without Loki's server, and saves as a JSON file that opens again:
+
+```julia
+exportjulia("analysis.jl", s)              # the graph as a script, tables beside it
+Loki.savesession("analysis.loki.json", s)  # contexts, prelude, graph, tables
+s2 = Loki.opensession("analysis.loki.json")
+```
+
+The script carries the prelude, the named contexts and one binding per node
+output, and snapshots the session's tables next to itself, so **including it
+reproduces the session's frames** — which is a test, not a hope:
+
+```julia
+using CausalFrames, Loki, Dates, Statistics
+using DataFrames, Parquet2
+using Loki.Acausal: insample
+
+const analysis = Context(0, 501)
+
+const SCRIPTDIR = @__DIR__
+tables = (;
+    prices = DataFrame(Parquet2.Dataset(joinpath(SCRIPTDIR, "prices.parquet")); copycols = false),
+)
+
+p_n1 = readtable(tables.prices)
+p_n2 = p_n1 |> logtransform(:close)
+p_n3 = p_n2 |> difference(:close_log)
+p_n4_insample = p_n3 |> insample(FitARMA(:close_log_diff; order = (1, 0, 1)))
+
+frame_n4_insample = load(analysis, p_n4_insample)
+```

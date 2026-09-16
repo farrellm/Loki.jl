@@ -1,0 +1,25 @@
+# Exported from a Loki session.
+using CausalFrames, Loki, Dates, Statistics
+using DuckDB, Parquet2
+using Loki.Acausal: insample
+using CausalFrames.Acausal: lead
+
+const TYPES = Dict(:time => DateTime, :close => Float64)
+
+const analysis = Context(DateTime(2015, 1, 1), DateTime(2026, 1, 1))
+const train = Context(DateTime(2015, 1, 1), DateTime(2020, 6, 30, 12, 30))
+
+p_csv = readcsv("prices.csv"; types = TYPES)
+p_clk = clock(Day(1))
+p_log = p_csv |> logtransform(:close)
+p_diff = p_log |> difference(:close_log)
+p_win = p_diff |> summarizewindows(p_clk, Day(30), [Count(), Std(:close_log_diff)])
+p_join = p_diff |> asofjoin(p_win; tolerance = Day(7))
+p_ahead = p_join |> lead(Day(1))
+p_fit_model = Loki.fitinput(FitARMA(:close_log_diff; order = (1, 0, 1)), p_join) |> fitonce(train, FitARMA(:close_log_diff; order = (1, 0, 1)))
+p_fit_insample = p_join |> insample(FitARMA(:close_log_diff; order = (1, 0, 1)); fitcontext = train)
+p_out = p_fit_insample |> writeparquet("residuals.parquet")
+
+frame_ahead = load(analysis, p_ahead)
+frame_fit_model = load(analysis, p_fit_model)
+# scan(analysis, p_out)  # runs the write

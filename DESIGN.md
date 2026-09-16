@@ -101,8 +101,12 @@ A node is a kind plus a `params` dictionary. A kind is registered with
   output port. `inputs[port]` is a pipeline, a vector of them for a variadic
   port, or `nothing` for an unconnected optional one; `env` resolves what
   parameters name — contexts, tables, and source text in the user module;
-- `emit(kind, params, inputvars) -> Vector{Expr}` — the script lines that
-  reproduce `build` (see "Export"; Milestone 2);
+- `emit(kind, params, inputs) -> NamedTuple` of `Expr`s, one per output port —
+  `build`'s shape with an expression in place of each pipeline, reproducing what
+  it builds. `inputs[port]` is the script binding a connected input is bound to
+  (a vector of them for a variadic port, `nothing` for an unconnected optional
+  one), and source text travels as a `Code` value the printer passes through
+  verbatim. A kind without `emit` cannot be exported (see "Export");
 - `isacausal(kind, params, port) -> Bool` (default `false`), per output port, so
   the fit node's `model` port stays causal while its `insample` port is not;
 - `iswrite(kind) -> Bool` (default `false`), marking the file sinks a run never
@@ -826,53 +830,98 @@ on the transport.
 
 ## Export
 
-`exportjulia(session; tables = :snapshot)` writes the graph as a script that
-runs without Loki's server:
+`exportjulia(session; tables = :argument)` returns the graph as a script that
+runs without Loki's server, and `exportjulia(path, session; tables = :snapshot)`
+writes it to `path`:
 
-1. `using CausalFrames, Loki, Dates`, plus `using CausalFrames.Acausal` when an
-   acausal CausalFrames operator is present, `using DuckDB, Parquet2` when a
-   parquet node is (so the script also runs where Loki's dependencies are not
-   loaded), and `using MLJ` with the model packages for MLJ nodes;
+1. `using CausalFrames, Loki, Dates, Statistics` — the user module's own
+   imports, so source-text parameters mean in the script what they meant in the
+   session, and anything else they need (MLJ and a model's package among them)
+   is already in the prelude, which is the only reason the session could
+   evaluate them. `using DuckDB, Parquet2` when a parquet node is present, and
+   `using Loki.Acausal: insample` or `using CausalFrames.Acausal: lead,
+   futurejoin` for the acausal names the script actually calls, so the
+   dependence on looking ahead is visible at the top;
+   `CausalFrames.Acausal.settime` is written in full, being deliberately
+   unexported;
 2. the prelude, verbatim;
 3. the named contexts as `const` bindings;
-4. one binding per node output in topological order, `p_<id> = p_<in> |> op(args...)`,
-   from each kind's `emit` — a fan-out reuses a binding, a multi-input node takes
-   bindings as arguments, and a Loki composite (`macd`, `arma`, `insample`)
-   exports as its own call rather than its expansion;
-5. `load` of the watched nodes and, optionally, the diagnostics they had open.
+4. one binding per node output in topological order, `p_<id> = p_<in> |> op(args...)`
+   (`p_<id>_<port>` for a node with several outputs), from each kind's `emit` — a
+   fan-out reuses a binding, a multi-input node takes bindings as arguments, and a
+   Loki composite (`macd`, `arma`, `insample`) exports as its own call rather
+   than its expansion. A write node keeps its binding, but its consumers read its
+   *input* — the pass-through a run compiles — and no target loads it, so
+   including a script never writes a file; the commented `scan` line at the foot
+   is how to run one;
 
-Table sources have no file behind them. With `tables = :snapshot` each table is
-written next to the script — `writeparquet` when its columns allow, `writejls`
-otherwise — and read back by the matching source; with `tables = :argument` the
-script reads `readtable(tables.<name>)` and expects the caller to supply
-`tables`.
+   The script holds what the targets need, as a run compiles them — their
+   ancestors, plus the write nodes hanging off that much of the graph — and not
+   the rest: a node the targets do not reach is left out, and a half-wired one
+   can no more fail an export than it fails a run. Exporting every sink, the
+   default with no run, does reach such a node and reports it. The session
+   *file* is not narrowed: it holds the whole graph, half-wired nodes included,
+   because it is the analysis and not a rendering of it;
+5. `load` of the watched nodes — the last run's targets, or every output nothing
+   reads — as `frame_<id>[_<port>] = load(analysis, p_…)`.
+
+Table sources have no file behind them, so a `table` node exports as
+`readtable(tables.<name>; …)`, exactly what it builds, and `tables` is either
+snapshotted or supplied:
+
+- `tables = :snapshot` writes each table beside the script and defines `tables`
+  to read it back. A plain table becomes a parquet file (`Parquet2.writefile`,
+  read back as `DataFrame(Parquet2.Dataset(path))`), which needs no `:time`
+  column, so a `lookupjoin`'s table snapshots too. A frozen `CausalFrame` goes
+  through the pipeline it came from — `readtable(frame) |> writeparquet` when its
+  columns allow, `writejls` when they hold what parquet cannot, a `FittedARMA`
+  say — and is read back with `load(ctx, readparquet(path; closed = true))` over
+  its own context, so it returns as the frame it was and keeps `readtable`'s
+  frame semantics. A plain table parquet cannot hold is an error naming the
+  column: freeze the node that produced it, or pass `tables = :argument`.
+- `tables = :argument` expects the caller to supply a `NamedTuple` with a field
+  per table the script reads. A table only a left-out node names is neither
+  declared nor snapshotted.
 
 Script text is printed by Loki's own emitter rather than `string(::Expr)`, so
-the output is stable enough to be golden-tested and diffed in version control.
-The export is correct when **including the script reproduces the session**:
-the frames it loads equal the session's cached frames for the same nodes. That
-is a test, not a hope.
+the output is stable enough to be golden-tested and diffed in version control;
+source text is passed through exactly as it was typed, and a keyword already at
+its operator's default is left out. The export is correct when **including the
+script reproduces the session**: the frames it loads equal the session's cached
+frames for the same nodes. That is a test, not a hope.
 
 ## Persistence
 
-A session saves to a `.loki.json` file:
+`savesession(path, session)` writes a `.loki.json` file, and
+`opensession(path)` reads one back:
 
 ```json
 {
   "format": "loki", "version": 1,
   "contexts": { "analysis": { "timetype": "DateTime", "start": "2015-01-01T00:00:00", "stop": "2026-01-01T00:00:00" } },
   "prelude": "",
+  "nextid": 7,
   "nodes": [ { "id": "n3", "kind": "difference", "params": { "column": "close_log", "order": 1, "lag": 1 }, "position": [420, 180] } ],
-  "edges": [ { "from": ["n2", "out"], "to": ["n3", "in"] } ],
-  "tables": [ { "name": "prices", "path": "prices.parquet" } ]
+  "edges": [ { "id": "e4", "from": ["n2", "out"], "to": ["n3", "in"] } ],
+  "tables": [ { "name": "prices", "path": "analysis.tables/prices.parquet", "format": "parquet", "frame": false } ]
 }
 ```
 
 The header is the JLS file's precedent: a foreign or future file is reported as
-such, not as a parse failure. No data is stored in the session file; tables are
-referenced by path, and saving a session with uploaded tables writes them
-alongside. Parameters hold source text, never evaluated values, so a session
-file is as portable as the exported script.
+such, not as a parse failure, and so is a file that carries the header but not
+the contexts, nodes and edges it must have. No data is stored in the session file; tables are
+referenced by path, and saving a session writes each one into a `<stem>.tables/`
+directory beside it, as an exported script's snapshots are written beside the
+script (see "Export") — a frozen frame carries the context it is read back over.
+That directory is Loki's, so saving again sweeps the snapshots nothing references
+any more (a table dropped or renamed, or a frame that now needs JLS where it
+needed parquet), leaving anything else in it alone; a script's directory is the
+caller's and is never swept.
+Parameters hold source text, never evaluated values, so a session file is as
+portable as the exported script. The graph's next id is saved with it, so an id
+freed before saving is not handed out again after opening; opening adds every
+node and edge through the session's own commands, so a file with a parameter the
+kind does not accept fails on that node rather than silently.
 
 ## Module layout
 
@@ -891,6 +940,7 @@ file is as portable as the exported script.
 | `src/diagnostics.jl` | the diagnostic functions and `DiagnosticResult` |
 | `src/usercode.jl` | session modules, prelude, parsing expression parameters |
 | `src/export.jl` | `exportjulia` and the script emitter |
+| `src/tables.jl` | table snapshots: `savetable`, `loadtable` and what a script reads them back with |
 | `src/persist.jl` | `.loki.json` save and open |
 | `src/session.jl` | `Session`, named contexts, tables, the command layer and events |
 | `src/server.jl` | HTTP routes, WebSocket, static bundle, `serve` |
@@ -912,8 +962,9 @@ loads CausalFrames' three extensions and every operator in the catalog is
 available without the user knowing which package enables it. Also
 StateSpaceModels (with MatrixEquations, already its dependency, for the filter's
 initial covariance), ModelContextProtocol, HTTP, JSON3, DataFrames, Tables,
-StatsBase, HypothesisTests, PrecompileTools, and the `Dates`, `LinearAlgebra`
-and `Serialization` stdlibs. StateSpaceModels is imported as a module alias
+StatsBase, HypothesisTests, PrecompileTools, and the `Dates` and
+`LinearAlgebra` stdlibs. Table snapshots go through CausalFrames' own file
+operators, so Loki never reaches for `Serialization` itself. StateSpaceModels is imported as a module alias
 (`SSM`), never `using`'d: its `LinearRegression` clashes with CausalFrames'.
 
 The consequences are deliberate. Load time is higher than CausalFrames' own,
@@ -972,9 +1023,11 @@ source of truth for the design.
 1. Loki's time-series operators, `insample`, the fit node's two ports, the
    graph, and the engine — usable headless from the REPL. *Done:* every
    operator in the catalog above, the node registry and graph, the session's
-   user code, and the engine and cache behind a headless `Session`; `emit`
-   arrives with Milestone 2.
-2. Export and persistence.
+   user code, and the engine and cache behind a headless `Session`.
+2. Export and persistence. *Done:* `emit` on every node kind and Loki's own
+   script printer, `exportjulia` with table snapshots, and
+   `savesession`/`opensession` for `.loki.json`. Including an exported script
+   reproduces the session's frames, and the emitted text is golden-tested.
 3. The server and web app, with diagnostics and the residual panel.
 4. MCP mode.
 5. Breadth: seasonal models in the UI, more diagnostics, undo and redo.

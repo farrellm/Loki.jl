@@ -35,6 +35,8 @@ include("fixtures.jl")
     include("graph.jl")
     include("nodes.jl")
     include("engine.jl")
+    include("export.jl")
+    include("persist.jl")
 
     # JET can lag pre-release Julia; the checks are the same on every
     # released version, so skipping them there loses nothing.

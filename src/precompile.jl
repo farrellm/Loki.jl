@@ -40,5 +40,10 @@
         smooth = addnode!(session, "ema", Dict("column" => "y", "span" => 5))
         connect!(session, (node, :out), (smooth, :in))
         freeze!(session, smooth)
+        # The exporter, printer and all: the first export otherwise costs a user
+        # seconds of compilation. `:argument` writes nothing.
+        exportjulia(session)
+        # Saving and opening covers the JSON and the table snapshots with it.
+        opensession(savesession(joinpath(dir, "precompile.loki.json"), session))
     end
 end
