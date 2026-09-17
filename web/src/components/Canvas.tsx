@@ -1,5 +1,6 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  applyNodeChanges,
   Background,
   Controls,
   ReactFlow,
@@ -39,7 +40,7 @@ function CanvasSurface({ store, compact, pendingKind, onPlaced }: CanvasProps) {
   const { graph, selected, setSelected, act } = store
   const flow = useReactFlow()
 
-  const nodes: Node[] = useMemo(
+  const fromgraph: Node[] = useMemo(
     () =>
       (graph?.nodes ?? []).map((node) => ({
         id: node.id,
@@ -49,6 +50,11 @@ function CanvasSurface({ store, compact, pendingKind, onPlaced }: CanvasProps) {
       })),
     [graph, compact, selected],
   )
+
+  // The session is the source of truth for what is on the canvas, but React
+  // Flow has to be answered as well as read: see `onNodesChange`.
+  const [nodes, setNodes] = useState(fromgraph)
+  useEffect(() => setNodes(fromgraph), [fromgraph])
 
   const edges: Edge[] = useMemo(
     () =>
@@ -69,8 +75,20 @@ function CanvasSurface({ store, compact, pendingKind, onPlaced }: CanvasProps) {
     [graph],
   )
 
+  // A change React Flow reports has to come back to it as a new `nodes` array,
+  // or work it queued against that answer is dropped: `fitView` — the button in
+  // the corner — only marks a fit as wanted and waits for the next `setNodes`,
+  // so swallowing the changes leaves the fit pending forever and the button
+  // does nothing. Which nodes exist is still the session's to say, so `add` and
+  // `remove` are dropped and the rest applied.
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
+      setNodes((current) =>
+        applyNodeChanges(
+          changes.filter((c) => c.type !== 'add' && c.type !== 'remove'),
+          current,
+        ),
+      )
       for (const change of changes) {
         if (change.type === 'position' && change.dragging === false) {
           const moved = graph?.nodes.find((n) => n.id === change.id)
