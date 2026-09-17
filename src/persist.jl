@@ -77,8 +77,22 @@ end
 Empty a session: cancel the run in flight, and drop its graph, contexts, tables,
 prelude, cached results and statuses. The session object survives, which is what
 lets [`Loki.opensession!`](@ref) replace what a server is serving.
+
+Broadcast as one `graph_changed`, so a browser watching the session sees it go.
 """
 function reset!(s::Session)
+    emptied = lock(s.lock) do
+        ids = sort!(collect(keys(s.graph.nodes)))
+        emptysession!(s)
+        ids
+    end
+    graphchanged!(s, "reset"; invalidated = emptied)
+    return s
+end
+
+# The emptying itself, without the event: `adopt!` follows it with a fill, and
+# the swap is announced once rather than as a clear and then an open.
+function emptysession!(s::Session)
     lock(s.lock) do
         cancel!(s)
         s.run = nothing
@@ -99,7 +113,7 @@ end
 # Take over everything `fresh` holds. Nothing here can fail — the file was read
 # into `fresh` already — so a session is never left half replaced.
 function adopt!(s::Session, fresh::Session)
-    reset!(s)
+    emptysession!(s)
     merge!(s.contexts, fresh.contexts)
     merge!(s.tables, fresh.tables)
     setprelude!(s.usercode, fresh.usercode.prelude)

@@ -3,6 +3,8 @@ import {
   Background,
   Controls,
   ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
   type Connection,
   type Edge,
   type Node,
@@ -14,18 +16,28 @@ import type { SessionStore } from '../store'
 
 const nodeTypes = { loki: NodeCard }
 
-export function Canvas({
-  store,
-  compact,
-  pendingKind,
-  onPlaced,
-}: {
+export interface CanvasProps {
   store: SessionStore
   compact: boolean
   pendingKind: string | null
   onPlaced: () => void
-}) {
+}
+
+// The provider is what lets the canvas ask React Flow where a tap landed: the
+// pane is panned and zoomed, so a pointer's screen coordinates are not a node's
+// graph coordinates, and placing by the raw offset drops a node somewhere else
+// entirely once the view has moved.
+export function Canvas(props: CanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <CanvasSurface {...props} />
+    </ReactFlowProvider>
+  )
+}
+
+function CanvasSurface({ store, compact, pendingKind, onPlaced }: CanvasProps) {
   const { graph, selected, setSelected, act } = store
+  const flow = useReactFlow()
 
   const nodes: Node[] = useMemo(
     () =>
@@ -87,6 +99,20 @@ export function Canvas({
     [act],
   )
 
+  // Where a pointer landed, in graph coordinates, offset so the node is centred
+  // under the finger. The empty canvas has no React Flow mounted and no
+  // transform to undo, so it falls back to the container's own offset.
+  const graphPoint = useCallback(
+    (clientX: number, clientY: number, host: DOMRect | undefined): [number, number] => {
+      if ((graph?.nodes.length ?? 0) > 0) {
+        const p = flow.screenToFlowPosition({ x: clientX, y: clientY })
+        return [p.x - 90, p.y - 26]
+      }
+      return [clientX - (host?.left ?? 0) - 90, clientY - (host?.top ?? 0) - 26]
+    },
+    [flow, graph],
+  )
+
   // Every action has a tap path. A node is added by dragging a kind from the
   // palette *or* by tapping the kind and then the canvas — React Flow handles
   // the touch side of connecting handles itself.
@@ -99,15 +125,14 @@ export function Canvas({
       const bounds = (event.target as HTMLElement)
         .closest('.canvas')
         ?.getBoundingClientRect()
-      const x = event.clientX - (bounds?.left ?? 0) - 90
-      const y = event.clientY - (bounds?.top ?? 0) - 26
+      const position = graphPoint(event.clientX, event.clientY, bounds)
       void act('Could not add the node', async () => {
-        const { id } = await api.addNode(pendingKind, {}, [x, y])
+        const { id } = await api.addNode(pendingKind, {}, position)
         setSelected(id)
       })
       onPlaced()
     },
-    [pendingKind, act, setSelected, onPlaced],
+    [pendingKind, act, setSelected, onPlaced, graphPoint],
   )
 
   const drop = useCallback(
@@ -115,16 +140,17 @@ export function Canvas({
       event.preventDefault()
       const kind = event.dataTransfer.getData('application/loki-kind')
       if (!kind) return
-      const bounds = event.currentTarget.getBoundingClientRect()
+      const position = graphPoint(
+        event.clientX,
+        event.clientY,
+        event.currentTarget.getBoundingClientRect(),
+      )
       void act('Could not add the node', async () => {
-        const { id } = await api.addNode(kind, {}, [
-          event.clientX - bounds.left - 90,
-          event.clientY - bounds.top - 26,
-        ])
+        const { id } = await api.addNode(kind, {}, position)
         setSelected(id)
       })
     },
-    [act, setSelected],
+    [act, setSelected, graphPoint],
   )
 
   if (graph !== null && graph.nodes.length === 0) {

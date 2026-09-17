@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Plot,
   correlogramTraces,
@@ -6,6 +6,7 @@ import {
   histogramTraces,
   qqTraces,
   seriesTraces,
+  type PlotSpec,
 } from './Plot'
 import { api } from '../api'
 import type { Diagnostic, GraphNode, Watched } from '../types'
@@ -170,33 +171,35 @@ function Warnings({ warnings }: { warnings: string[] }) {
   )
 }
 
+// The spec is memoised on the result rather than rebuilt every render: `Plot`
+// tears the Plotly graph down and builds it again whenever the spec is a new
+// object, and this component re-renders on every session event — so a chart would
+// be destroyed ten times a second during a run, losing its pan and zoom each time.
 function Chart({ result, height }: { result: Diagnostic; height?: number }) {
+  const drawn = useMemo(() => chartOf(result), [result])
+  if (drawn === null) return null
+  return <Plot spec={drawn.spec} height={height} label={drawn.label} />
+}
+
+function chartOf(result: Diagnostic): { spec: PlotSpec; label: string } | null {
   switch (result.kind) {
     case 'seriesplot':
-      return <Plot spec={seriesTraces(result.data)} height={height} label="Series" />
+      return { spec: seriesTraces(result.data), label: 'Series' }
     case 'acf':
     case 'pacf':
-      return (
-        <Plot
-          spec={correlogramTraces(result.data)}
-          height={height}
-          label={`${result.kind.toUpperCase()} with its significance band`}
-        />
-      )
+      return {
+        spec: correlogramTraces(result.data),
+        label: `${result.kind.toUpperCase()} with its significance band`,
+      }
     case 'histogram':
-      return (
-        <Plot
-          spec={histogramTraces(result.data)}
-          height={height}
-          label="Distribution against a fitted normal"
-        />
-      )
+      return {
+        spec: histogramTraces(result.data),
+        label: 'Distribution against a fitted normal',
+      }
     case 'qqplot':
-      return <Plot spec={qqTraces(result.data)} height={height} label="Normal QQ plot" />
+      return { spec: qqTraces(result.data), label: 'Normal QQ plot' }
     case 'forecastfan':
-      return (
-        <Plot spec={fanTraces(result.data)} height={height} label="Forecast fan" />
-      )
+      return { spec: fanTraces(result.data), label: 'Forecast fan' }
     default:
       return null
   }

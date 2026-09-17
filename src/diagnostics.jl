@@ -1024,10 +1024,26 @@ end
 # The rows a whole-window fit was fitted on, and the rows after it. `fitstop` is
 # a time or a `Context` whose `stop` splits them; without one, every row is in
 # sample, which is what a fit over the run's own context means.
+# A `fitstop` that arrived as a query string is text whatever the frame's time
+# type is, and comparing text to a `DateTime` is a `MethodError` rather than an
+# answer. It is parsed into the time type here, so a bad one names itself.
+fitstoptime(::Type, stop) = stop
+function fitstoptime(::Type{T}, stop::AbstractString) where {T}
+    T <: AbstractString && return stop
+    try
+        return parse(T, stop)
+    catch err
+        err isa InterruptException && rethrow()
+        throw(ArgumentError("fitstop $(repr(stop)) is not a $T"))
+    end
+end
+
 function splitatfit(frame::CausalFrame, fitstop)
     stop = fitstop isa Context ? fitstop.stop : fitstop
     ctx = context(frame)
     stop === nothing && return (frame, nothing)
+    stop = fitstoptime(
+        Base.nonmissingtype(columntype(Tables.schema(frame), :time)), stop)
     df = DataFrame(frame)
     inside = df.time .< stop
     all(inside) && return (frame, nothing)

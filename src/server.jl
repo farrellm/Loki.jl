@@ -27,6 +27,13 @@ mutable struct Server
     # connections to finish, and a socket's reader never finishes one, so
     # stopping has to end them itself.
     const sockets::Vector{Any}
+    # The subscribers this server opened, so stopping it ends its own watchers
+    # and leaves a REPL's or an agent's `Loki.subscribe!` alone.
+    const subscribers::Vector{Subscriber}
+    # The listener accepts before `origins`, `hosts` and `port` are known — with
+    # `port = 0` the port is not known until it is listening — so a request that
+    # beats them waits here rather than being refused as a forbidden host.
+    const ready::Threads.Event
     const lock::ReentrantLock
     http::Any                     # HTTP.Server, once it is listening
     port::Int
@@ -845,19 +852,28 @@ end
 
 # --- the request pipeline --------------------------------------------------------
 
+# Every route is inside the one `catch`, `/api/auth` and the static bundle
+# included: a malformed body to the auth route is the client's fault and has to
+# come back as a 400, not as whatever HTTP.jl makes of an escaping exception.
 function handlerequest(srv::Server, req::HTTP.Request)
     checkorigin(srv, req) || return jsonerror(403, "forbidden origin")
     checkhost(srv, req) || return jsonerror(403, "forbidden host")
-    path = HTTP.URI(req.target).path
-    # The token arrives in the fragment, which is never sent to a server, so the
-    # bundle itself cannot be authenticated and does not need to be: it is the
-    # same files for everyone and does nothing until the app exchanges the token.
-    startswith(path, "/api/") || return staticresponse(srv, path)
-    path == "/api/auth" && return authroute(srv, req)
-    authorized(srv, req) || return jsonerror(401, "unauthorized")
     return try
-        withorigin(:ui) do
-            srv.router(req)
+        path = HTTP.URI(req.target).path
+        # The token arrives in the fragment, which is never sent to a server, so
+        # the bundle itself cannot be authenticated and does not need to be: it is
+        # the same files for everyone and does nothing until the app exchanges the
+        # token.
+        if !startswith(path, "/api/")
+            staticresponse(srv, path)
+        elseif path == "/api/auth"
+            authroute(srv, req)
+        elseif !authorized(srv, req)
+            jsonerror(401, "unauthorized")
+        else
+            withorigin(:ui) do
+                srv.router(req)
+            end
         end
     catch err
         err isa InterruptException && rethrow()
@@ -876,6 +892,7 @@ function writeresponse(stream::HTTP.Stream, resp::HTTP.Response)
 end
 
 function servestream(srv::Server, stream::HTTP.Stream)
+    wait(srv.ready)
     req = stream.message
     if HTTP.WebSockets.isupgrade(req)
         # Checked before the upgrade: a socket refused at the handshake never
@@ -918,7 +935,10 @@ function serveesocket(srv::Server, ws)
         offer!(sub, Event(:heartbeat, :ui, 0, time(), Dict{String,Any}()))
     end
     writer = Threads.@spawn socketwriter(ws, sub)
-    lock(() -> push!(srv.sockets, ws), srv.lock)
+    lock(srv.lock) do
+        push!(srv.sockets, ws)
+        push!(srv.subscribers, sub)
+    end
     try
         for msg in ws
             handlesocketmessage(sub, msg)
@@ -929,7 +949,10 @@ function serveesocket(srv::Server, ws)
         @debug "Loki websocket ended" exception = err
     finally
         close(beat)
-        lock(() -> filter!(x -> x !== ws, srv.sockets), srv.lock)
+        lock(srv.lock) do
+            filter!(x -> x !== ws, srv.sockets)
+            filter!(x -> x !== sub, srv.subscribers)
+        end
         unsubscribe!(s, sub)
         try
             wait(writer)
@@ -1026,8 +1049,8 @@ function serve(s::Session; port::Integer = 8712,
             $(needserver(s).port); stop it first"))
     srv = Server(s, String(token),
         public_url === nothing ? nothing : String(public_url),
-        normpath(String(assets)), Any[], ReentrantLock(), nothing, Int(port),
-        Set{String}(), Set{String}(), nothing)
+        normpath(String(assets)), Any[], Subscriber[], Threads.Event(),
+        ReentrantLock(), nothing, Int(port), Set{String}(), Set{String}(), nothing)
     srv.router = buildrouter(srv)
     http = HTTP.serve!("127.0.0.1", Int(port); stream = true, listenany = port == 0,
         verbose = -1) do stream
@@ -1037,6 +1060,7 @@ function serve(s::Session; port::Integer = 8712,
     srv.port = Int(HTTP.port(http))
     srv.origins = allowedorigins(srv.port, srv.public_url)
     srv.hosts = allowedhosts(srv.port, srv.public_url)
+    notify(srv.ready)
     lock(() -> (s.server = srv), s.lock)
     announce(srv)
     open_browser && openbrowser(weburl(srv))
@@ -1060,10 +1084,15 @@ function stop!(srv::Server)
     # was holding active. Only then can the server be closed — `Base.close` waits
     # for active connections, and `forceclose` shuts the rest down without
     # waiting for a peer that may never answer.
-    for sub in copy(srv.session.subscribers)
+    subs, sockets = lock(srv.lock) do
+        out = (copy(srv.subscribers), copy(srv.sockets))
+        empty!(srv.subscribers)
+        empty!(srv.sockets)
+        out
+    end
+    for sub in subs
         unsubscribe!(srv.session, sub)
     end
-    sockets = lock(() -> (out = copy(srv.sockets); empty!(srv.sockets); out), srv.lock)
     for ws in sockets
         try
             close(ws)

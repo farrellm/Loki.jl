@@ -23,6 +23,11 @@ export function CodeField({
   const view = useRef<EditorView | null>(null)
   const commit = useRef(onCommit)
   commit.current = onCommit
+  // The value the session already holds. Committing text equal to it would still
+  // be a graph edit — the server invalidates the node and everything downstream
+  // on any PATCH — so tabbing through a code field must not throw results away.
+  const committed = useRef(value)
+  committed.current = value
 
   useEffect(() => {
     if (host.current === null) return
@@ -50,7 +55,8 @@ export function CodeField({
           // every keystroke: a half-typed expression is not a graph edit.
           EditorView.domEventHandlers({
             blur: (_, self) => {
-              commit.current(self.state.doc.toString())
+              const text = self.state.doc.toString()
+              if (text !== committed.current) commit.current(text)
               return false
             },
           }),

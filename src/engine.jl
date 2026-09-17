@@ -79,7 +79,9 @@ Run(targets::Vector{Tuple{String,Symbol}}, cancelled::Threads.Atomic{Bool},
     task::Union{Nothing,Task}; origin::Symbol = :repl) =
     Run(targets, cancelled, task, origin, Dict{Tuple{String,Symbol},Float64}())
 
-# At most one progress event per target per this many seconds, plus the final one.
+# At most one progress event per target per this many seconds. There is no final
+# flush: a target's true row count arrives with its `result_ready`, and the run's
+# end with `run_progress` "done".
 const PROGRESSINTERVAL = 0.1
 
 function Base.wait(run::Run)

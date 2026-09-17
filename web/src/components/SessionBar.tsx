@@ -33,8 +33,13 @@ export function SessionBar({
       const link = document.createElement('a')
       link.href = url
       link.download = 'analysis.jl'
+      // Attached and revoked a turn later: WebKit cancels a download whose blob
+      // URL is revoked in the same task as the click, and Firefox ignores a
+      // click on an anchor that is not in the document.
+      document.body.append(link)
       link.click()
-      URL.revokeObjectURL(url)
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
       note('Exported analysis.jl')
     } catch (error) {
       note(error instanceof Error ? error.message : String(error), 'error')

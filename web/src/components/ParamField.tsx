@@ -140,15 +140,21 @@ function Control({
         />
       )
     }
+    // A value the list does not offer is still the value: a column the upstream
+    // result no longer has must read as itself rather than as an empty field
+    // that says the parameter was never set.
+    const current = blank ? '' : String(value)
+    const choices =
+      current === '' || options.includes(current) ? options : [current, ...options]
     return (
       <select
         id={id}
         className="mono"
-        value={blank ? '' : String(value)}
+        value={current}
         onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
       >
         <option value="">—</option>
-        {options.map((option) => (
+        {choices.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>
