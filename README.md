@@ -65,6 +65,7 @@ Box–Jenkins loop.
 
 ```julia
 Loki.serve(s)   # prints a URL carrying a per-session token
+Loki.stop!(s)   # closes the listener and every open socket, leaving no task behind
 ```
 
 It binds to `127.0.0.1` in every mode, and every API route needs the token or
