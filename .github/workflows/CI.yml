@@ -51,6 +51,9 @@ jobs:
     name: Web app
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions: # lets julia-actions/cache delete the old caches it has created
+      actions: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
@@ -58,6 +61,10 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
+      # Precompile here, where the progress shows, rather than inside
+      # Playwright's webServer wait, which prints nothing until the server is up.
+      - run: julia --color=yes --project -e 'using Pkg; Pkg.precompile(); using Loki'
+        timeout-minutes: 15
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
