@@ -50,12 +50,84 @@ Loki.inputs
 Loki.outputs
 Loki.paramschema
 Loki.validateparams
+Loki.checkparams
 Loki.build
 Loki.isacausal
 Loki.iswrite
 Loki.register_nodekind!
 Loki.nodekind
 Loki.nodekinds
+```
+
+## Diagnostics
+
+```@docs
+Loki.DiagnosticResult
+Loki.seriesplot
+Loki.preview
+Loki.columnvectors
+Loki.keyvalues
+Loki.lttb
+```
+
+### Correlation and tests
+
+```@docs
+acf
+pacf
+ljungbox
+adftest
+Loki.armadof
+```
+
+### Distribution
+
+```@docs
+Loki.histogram
+Loki.qqplot
+```
+
+### Fits and residuals
+
+```@docs
+fitreport
+forecastfan
+Loki.residuals
+```
+
+### Running one by name
+
+```@docs
+Loki.diagnostic
+Loki.diagnostics
+```
+
+## Events
+
+```@docs
+Loki.Event
+Loki.Subscriber
+Loki.subscribe!
+Loki.unsubscribe!
+Loki.nextevent
+Loki.emit!
+Loki.eventjson
+Loki.withorigin
+Loki.currentorigin
+```
+
+## Server
+
+```@docs
+serve
+Loki.Server
+Loki.stop!
+Loki.server
+Loki.port
+Loki.token
+Loki.weburl
+Loki.graphjson
+Loki.nodecalls
 ```
 
 ## Export
@@ -76,6 +148,8 @@ Loki.loadtable
 ```@docs
 Loki.savesession
 Loki.opensession
+Loki.opensession!
+Loki.reset!
 ```
 
 ## User code
@@ -95,8 +169,8 @@ Loki.Node
 Loki.Edge
 Loki.addnode!
 Loki.setparams!
-Loki.setposition!
 Loki.removenode!
+Loki.setposition!
 Loki.connect!
 Loki.disconnect!
 Loki.inedges

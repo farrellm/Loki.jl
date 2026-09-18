@@ -8,10 +8,7 @@ include("fixtures.jl")
 
 @testset "Loki.jl" begin
     @testset "Aqua" begin
-        # The persistent-tasks check resolves Loki in a fresh environment, which
-        # finds the unregistered CausalFrames only through [sources] — and Julia
-        # 1.10 ignores [sources]. 1.11+ still runs it.
-        Aqua.test_all(Loki; persistent_tasks = VERSION >= v"1.11")
+        Aqua.test_all(Loki)
     end
 
     @testset "dependencies" begin
@@ -35,6 +32,9 @@ include("fixtures.jl")
     include("graph.jl")
     include("nodes.jl")
     include("engine.jl")
+    include("diagnostics.jl")
+    include("events.jl")
+    include("server.jl")
     include("export.jl")
     include("persist.jl")
 

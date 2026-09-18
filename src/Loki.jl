@@ -15,7 +15,9 @@ using Parquet2: Parquet2
 # Imported, not used: MLJModelInterface re-exports the scientific types, and its
 # `Count` would clash with CausalFrames' summarizer.
 import MLJModelInterface
+using HTTP: HTTP
 using JSON3: JSON3
+using Random: Random
 using PrecompileTools: @setup_workload, @compile_workload
 
 using Dates: Dates
@@ -23,31 +25,40 @@ using Statistics: Statistics
 using DataFrames: DataFrame, nrow
 using Tables: Tables
 
-using LinearAlgebra: BLAS, I, dot
+using LinearAlgebra: I, dot, mul!
+# Imported as modules, never `using`'d: `StatsBase.pacf` would clash with Loki's
+# own exported `pacf`, and extending it on a `CausalFrame` would be piracy.
+import StatsBase
+import StatsFuns
+import HypothesisTests as HT
 using MatrixEquations: lyapd
 # Imported as a module: StateSpaceModels exports a `LinearRegression` that would
 # clash with CausalFrames'.
 import StateSpaceModels as SSM
 
 export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
-    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia
+    boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia,
+    acf, pacf, adftest, ljungbox, fitreport, forecastfan, serve
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")
 include("acausal.jl")
 include("registry.jl")
 include("graph.jl")
+include("events.jl")
 include("usercode.jl")
 include("tables.jl")
 include("nodes/causalframes.jl")
 include("nodes/timeseries.jl")
 include("compile.jl")
 include("engine.jl")
+include("diagnostics.jl")
 include("session.jl")
 # After the session: `exportjulia` takes one, and everything else here is reached
 # from a node kind's `emit` at run time.
 include("export.jl")
 include("persist.jl")
+include("server.jl")
 include("precompile.jl")
 
 end

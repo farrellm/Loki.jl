@@ -1,3 +1,6 @@
 Manifest*.toml
 /docs/build/
 /docs/src/index.md
+# The browser bundle is built, not committed: `cd web && npm ci && npm run build`.
+/assets/web/
+.playwright-mcp/

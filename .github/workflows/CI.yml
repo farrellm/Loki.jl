@@ -24,7 +24,6 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.10'
           - '1.12'
           - 'pre'
         os:
@@ -38,25 +37,62 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v3
-      # CausalFrames is unregistered. Julia 1.11+ finds it through [sources] in
-      # Project.toml; 1.10 ignores [sources], so add it by URL first.
-      - name: Add CausalFrames by URL (Julia 1.10)
-        if: matrix.version == '1.10'
-        run: julia --project -e 'using Pkg; Pkg.add(url = "https://github.com/farrellm/CausalFrames.jl")'
+      # CausalFrames is unregistered; Julia finds it through [sources] in
+      # Project.toml, which every supported version reads.
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
-        with:
-          # JET's latest (0.10+) drops Julia 1.10, so on the floor job we let
-          # the resolver pick JET's newest 1.10-compatible version instead of
-          # forcing latest, which is unsatisfiable on 1.10 and fails to resolve.
-          # 1.12/pre keep 'auto', still exercising the newest JET.
-          force_latest_compatible_version: ${{ matrix.version == '1.10' && 'false' || 'auto' }}
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           use_oidc: true
           fail_ci_if_error: false
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions: # lets julia-actions/cache delete the old caches it has created
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      # Precompile here, where the progress shows, rather than inside
+      # Playwright's webServer wait, which prints nothing until the server is up.
+      - run: julia --color=yes --project -e 'using Pkg; Pkg.precompile(); using Loki'
+        timeout-minutes: 15
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # The bundle is not in version control; the server serves it from here.
+      - run: npm run build
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npx playwright install --with-deps chromium webkit
+        working-directory: web
+      # Desktop Chromium, and WebKit on an iPhone profile where the specs may
+      # only tap: a hover-only or drag-only affordance fails here rather than on
+      # someone's phone.
+      - run: npm run test:e2e
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+
   format:
     name: Format check
     runs-on: ubuntu-latest

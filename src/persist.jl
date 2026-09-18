@@ -37,38 +37,127 @@ end
 """
     Loki.opensession(path; cachebytes = 2^30) -> Session
 
-Read back what [`Loki.savesession`](@ref) wrote. Nodes are added and edges
-connected through the session's own commands, so every parameter is checked as it
-would be on an edit, and a node the file cannot rebuild is a
+Read back what [`Loki.savesession`](@ref) wrote, as a fresh session. Nodes are
+added and edges connected through the session's own commands, so every parameter
+is checked as it would be on an edit, and a node the file cannot rebuild is a
 [`Loki.NodeError`](@ref) naming it. A file that is not a Loki session, or one
 written by a newer Loki, says so.
+
+[`Loki.opensession!`](@ref) reads one into a session that is already running.
 """
-function opensession(path::AbstractString; cachebytes::Integer = 2^30)
+opensession(path::AbstractString; cachebytes::Integer = 2^30) =
+    readinto!(Session(; cachebytes), path)
+
+"""
+    Loki.opensession!(s::Session, path) -> Session
+
+Read a session file into `s`, replacing its contexts, tables, prelude and graph
+— the session object itself is kept, so a REPL binding and a running server go
+on pointing at the same session.
+
+The file is read into a throwaway session first, so one the running Loki cannot
+rebuild — an unknown node kind, a parameter that no longer validates — leaves
+`s` exactly as it was rather than half replaced. The whole swap is one
+`graph_changed` event.
+"""
+function opensession!(s::Session, path::AbstractString)
+    fresh = readinto!(Session(; cachebytes = s.cache.budget), path)
+    lock(s.lock) do
+        cancel!(s)
+        adopt!(s, fresh)
+    end
+    graphchanged!(s, "open"; path = String(path),
+        invalidated = sort!(collect(keys(s.graph.nodes))))
+    return s
+end
+
+"""
+    Loki.reset!(s::Session) -> Session
+
+Empty a session: cancel the run in flight, and drop its graph, contexts, tables,
+prelude, cached results and statuses. The session object survives, which is what
+lets [`Loki.opensession!`](@ref) replace what a server is serving.
+
+Broadcast as one `graph_changed`, so a browser watching the session sees it go.
+"""
+function reset!(s::Session)
+    emptied = lock(s.lock) do
+        ids = sort!(collect(keys(s.graph.nodes)))
+        emptysession!(s)
+        ids
+    end
+    graphchanged!(s, "reset"; invalidated = emptied)
+    return s
+end
+
+# The emptying itself, without the event: `adopt!` follows it with a fill, and
+# the swap is announced once rather than as a clear and then an open.
+function emptysession!(s::Session)
+    lock(s.lock) do
+        cancel!(s)
+        s.run = nothing
+        empty!(s.graph.nodes)
+        empty!(s.graph.order)
+        empty!(s.graph.edges)
+        s.graph.nextid = 0
+        empty!(s.contexts)
+        empty!(s.tables)
+        empty!(s.status)
+        empty!(s.errors)
+        cachedrop!(s.cache, _ -> true)
+        setprelude!(s.usercode, "")
+    end
+    return s
+end
+
+# Take over everything `fresh` holds. Nothing here can fail — the file was read
+# into `fresh` already — so a session is never left half replaced.
+function adopt!(s::Session, fresh::Session)
+    emptysession!(s)
+    merge!(s.contexts, fresh.contexts)
+    merge!(s.tables, fresh.tables)
+    setprelude!(s.usercode, fresh.usercode.prelude)
+    merge!(s.graph.nodes, fresh.graph.nodes)
+    append!(s.graph.order, fresh.graph.order)
+    append!(s.graph.edges, fresh.graph.edges)
+    s.graph.nextid = fresh.graph.nextid
+    return s
+end
+
+# The file, replayed through the session's own commands so every parameter is
+# checked as it would be on an edit. Quiet: opening is one event, not one per
+# node.
+function readinto!(s::Session, path::AbstractString)
     doc = readsession(path)
-    s = Session(; cachebytes)
-    setprelude!(s, String(get(doc, :prelude, "")))
-    for (name, entry) in pairs(doc.contexts)
-        setcontext!(s, String(name), readcontext(entry))
-    end
-    base = dirname(abspath(path))
-    for entry in get(doc, :tables, ())
-        addtable!(s, String(entry.name), loadtable(tablefile(entry, base)))
-    end
-    for node in doc.nodes
-        id = String(node.id)
-        try
-            addnode!(s, String(node.kind), plainjson(node.params);
-                id, position = (node.position[1], node.position[2]))
-        catch err
-            err isa InterruptException && rethrow()
-            throw(tagerror(err, id))
+    was = s.quiet
+    s.quiet = true
+    try
+        setprelude!(s, String(get(doc, :prelude, "")))
+        for (name, entry) in pairs(doc.contexts)
+            setcontext!(s, String(name), readcontext(entry))
         end
+        base = dirname(abspath(path))
+        for entry in get(doc, :tables, ())
+            addtable!(s, String(entry.name), loadtable(tablefile(entry, base)))
+        end
+        for node in doc.nodes
+            id = String(node.id)
+            try
+                addnode!(s, String(node.kind), plainjson(node.params);
+                    id, position = (node.position[1], node.position[2]))
+            catch err
+                err isa InterruptException && rethrow()
+                throw(tagerror(err, id))
+            end
+        end
+        for edge in doc.edges
+            connect!(s, (String(edge.from[1]), Symbol(edge.from[2])),
+                (String(edge.to[1]), Symbol(edge.to[2])); id = String(edge.id))
+        end
+        s.graph.nextid = max(Int(get(doc, :nextid, 0)), s.graph.nextid)
+    finally
+        s.quiet = was
     end
-    for edge in doc.edges
-        connect!(s, (String(edge.from[1]), Symbol(edge.from[2])),
-            (String(edge.to[1]), Symbol(edge.to[2])); id = String(edge.id))
-    end
-    s.graph.nextid = max(Int(get(doc, :nextid, 0)), s.graph.nextid)
     return s
 end
 

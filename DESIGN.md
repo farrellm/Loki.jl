@@ -80,8 +80,12 @@ Ports are named per node kind; every port carries a `CausalPipeline`, so the
 one type check an edge needs is arity (a single-input port takes one edge, a
 variadic port such as `merge`'s takes many, in connection order; an optional
 port may be left unconnected). `connect!` rejects an edge that would close a
-cycle, and `addnode!`/`setparams!` reject parameters the kind does not accept,
-so every edit is checked where it is made. Ids are `n1`, `e2`, … unless given,
+cycle, and `addnode!`/`setparams!` reject parameters the kind does not accept or
+cannot hold, so every edit is checked where it is made. A *missing* required
+parameter is not an edit error: a node is placed from the palette before it is
+filled in, so an incomplete node is unfinished rather than invalid — it sits
+idle until something asks for it, and then fails on itself with the parameter
+named. `build` and `emit` still demand a complete node. Ids are `n1`, `e2`, … unless given,
 and are never reused. Node positions in the canvas are stored on the graph but
 play no part in evaluation.
 
@@ -131,7 +135,10 @@ One live analysis: a `Graph`, the named contexts, the in-memory tables, the user
 code module, the result cache, the current run, and the event subscribers
 (browser sockets and the MCP server). Every mutation, from either side, goes
 through the session's command layer under one lock and is broadcast as an event
-(see "Server").
+(see "Server"). `opensession!(s, path)` reads a file into a session that is
+already running — the object the REPL holds is the one that changes — by reading
+it into a throwaway session first, so a file this Loki cannot rebuild leaves the
+live one untouched.
 
 The headless session of Milestone 1 has all of this but the subscribers and
 events: `Session(; tables, contexts, prelude, cachebytes)`; `setcontext!`,
@@ -596,9 +603,23 @@ flows back into the graph; a statistic that should (a rolling correlation, a
 rolling standard deviation) is a node, and each causal diagnostic offers
 **promote to node**, which adds the corresponding `addrollingcolumns` node.
 
-Each diagnostic is a Julia function over a `CausalFrame`, exported from `Loki`
-so the script can call it, returning a `DiagnosticResult`: plot-ready data for
-the web app and a compact numeric summary for MCP.
+Each diagnostic is a Julia function over a `CausalFrame` returning a
+`DiagnosticResult`: plot-ready data for the web app and a compact numeric
+summary for MCP. `acf`, `pacf`, `ljungbox`, `adftest`, `fitreport` and
+`forecastfan` are exported, so a script can call them; `seriesplot`, `preview`,
+`histogram`, `qqplot` and `residuals` are `Loki.`-qualified, because those names
+belong to everyone (`residuals` is StatsAPI's, `histogram` every plotting
+package's). `Loki.diagnostic(frame, kind; params)` runs any of them by name from
+string-valued parameters, so the HTTP routes and the MCP tool share one argument
+list rather than two that drift.
+
+Every float a diagnostic reports is sanitized to `null` where it is built:
+`JSON3.write` refuses `NaN` and `Inf`, and a constant series, an all-`missing`
+column or a failed fit produce them routinely. And nothing that would raise on a
+short window does: StatsBase's `pacf` needs `2·lags < n`, `LjungBoxTest` needs
+`dof < lags`, and a singular window has no correlogram at all — each clamps or
+drops with a warning the panel shows, because a short window is exactly what a
+user points at first.
 
 | Diagnostic | Function | Notes |
 |---|---|---|
@@ -606,10 +627,17 @@ the web app and a compact numeric summary for MCP.
 | ACF / PACF | `acf(frame, col; lags)`, `pacf(frame, col; lags)` | StatsBase `autocor`/`pacf`, with ±1.96/√n bands; the summary lists the significant lags |
 | Distribution | `histogram`, `qqplot` | against a fitted normal |
 | Stationarity | `adftest(frame, col)` | HypothesisTests `ADFTest` |
-| Ljung–Box | `ljungbox(frame, col; lags, dof)` | HypothesisTests `LjungBoxTest`; `dof` defaults to `p + q` on a residual column |
+| Ljung–Box | `ljungbox(frame, col; lags, dof)` | HypothesisTests `LjungBoxTest`; `dof` defaults to `p + q + P + Q` on a residual column |
 | Fit report | `fitreport(frame; column = :model)` | a `FittedARMA`'s hyperparameters, information criteria and status, or `modelreports` for MLJ |
 | Residual panel | `residuals(frame, col)` | see below |
-| Forecast fan | `forecastfan(frame, col; h)` | StateSpaceModels `forecast` from the fitted model, with intervals |
+| Forecast fan | `forecastfan(frame, col; h, models)` | StateSpaceModels `forecast` from the fitted model, with intervals |
+
+Two of these need something the frame alone does not carry, because `applyarma`
+drops the model column: an in-sample residual stream has no `FittedARMA` in it.
+The Ljung–Box degrees of freedom come from the keyword, else from a model column
+if there is one, else from the fit node's own `order` and `seasonal_order` —
+which only the server's route knows, since it has both the frame and the node.
+The same route hands `forecastfan` the `model` port's frame as `models`.
 
 **The residual panel** opens on any `insample` port and gathers what the
 identification loop needs in one view: residuals over time, fitted values over
@@ -660,9 +688,12 @@ The containment is the server's:
 - **It requires a per-session random token**, behind Tailscale too. The tailnet
   limits who can *connect*; the token limits who can *use this session*, and
   with code execution on the table both are wanted.
-- **It checks the `Origin`** of requests and WebSocket upgrades against DNS
-  rebinding, accepting `http://127.0.0.1:<port>`, `http://localhost:<port>`, and
-  the configured `public_url` — nothing else.
+- **It checks the `Origin` and the `Host`** of requests and WebSocket upgrades,
+  accepting `http://127.0.0.1:<port>`, `http://localhost:<port>`, and the
+  configured `public_url` — nothing else. `Origin` alone does not close DNS
+  rebinding: an attacker's name resolving to 127.0.0.1 yields
+  `Host: evil.example:8712` on a same-origin GET that carries no `Origin` at
+  all.
 
 An MCP client can submit code through the same parameters, and connecting one
 to Loki grants it the same power the user has at the REPL.
@@ -684,8 +715,13 @@ A single-page app written in TypeScript with Vite and React:
 - **Session bar** — named contexts, tables, prelude, run and cancel, export,
   and the origin of the most recent change (you or the agent).
 
-The built bundle ships inside the package, under `assets/web`, so users never
-need Node; `web/` holds the sources. One plotting library was chosen over two:
+The bundle is built into `assets/web`, which is **not** in version control:
+`web/` holds the sources, and `cd web && npm ci && npm run build` produces it. A
+server without one serves a page saying so rather than refusing to start, so a
+fresh clone is a working API and a REPL session immediately, and a browser once
+the bundle is built. (Shipping it to users who have no Node — a committed
+bundle, or an `Artifacts.toml` — is a packaging decision for a release, not a
+design one.) One plotting library was chosen over two:
 Plotly covers every chart above, and server-side downsampling handles the long
 series that would otherwise argue for uPlot.
 
@@ -726,9 +762,28 @@ enough for a phone on a cellular connection.
 
 ## Server
 
-`Loki.serve(; port, public_url = get(ENV, "LOKI_PUBLIC_URL", nothing), tables, open_browser = true)`
+`Loki.serve(; port, public_url = get(ENV, "LOKI_PUBLIC_URL", nothing), tables, token, open_browser = true)`
 starts an HTTP.jl server (`HTTP.serve!`, non-blocking) on `127.0.0.1` for the
-static bundle, a REST API and one WebSocket, and returns the session.
+static bundle, a REST API and one WebSocket, and returns the session;
+`Loki.stop!(session)` ends it. `port = 0` takes a free one, which `Loki.port`
+then reports — how the tests get one — and `token` is given only to make a run
+reproducible, since it defaults to a fresh random one.
+
+HTTP.jl is pinned to 1.x deliberately. HTTP 2's WebSocket server is a separate
+websocket-only listener that cannot share a port with the REST API, which would
+mean two ports, two origins, and two things for `tailscale serve` to proxy;
+HTTP 1's `stream = true` handler serves both on one socket. Oxygen.jl was
+evaluated and declined: it brings JSON.jl alongside JSON3 — two serializers with
+different `NaN` behaviour, in a process where sanitizing `NaN` is already the
+likeliest failure — plus eight more dependencies and a module-global router, for
+routing sugar over fourteen routes.
+
+**When the bundle has not been built**, `serve` does not refuse to start: every
+non-`/api` GET returns a page saying how to build it, and the API, the socket
+and MCP stay up. That is also how the tests run without Node. `index.html` is
+served `no-store` rather than `no-cache` — with no validator to revalidate
+against a browser reuses it anyway, and a stale index against a fresh server
+means a stale app.
 
 **Access from an iPhone** is through `tailscale serve`, and only through it.
 `public_url` is the HTTPS address it exposes on the tailnet; Loki uses it for
@@ -758,9 +813,10 @@ or the cookie.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/nodekinds` | kinds with ports and param schemas |
+| `POST` | `/api/auth` | exchange the fragment token for the session cookie |
+| `GET` | `/api/nodekinds` | kinds with ports, param schemas and their order |
 | `GET` | `/api/graph` | the whole graph, with status and taint |
-| `POST` / `PATCH` / `DELETE` | `/api/nodes[/:id]` | add, edit, remove a node |
+| `POST` / `PATCH` / `DELETE` | `/api/nodes[/:id]` | add, edit, remove a node; `PATCH` merges `params` (a `null` removes one) and moves a node by `position`, which invalidates nothing |
 | `POST` / `DELETE` | `/api/edges[/:id]` | connect, disconnect |
 | `GET` / `PUT` | `/api/contexts[/:name]` | named contexts |
 | `GET` / `POST` | `/api/tables[/:name]` | list, upload |
@@ -774,14 +830,32 @@ or the cookie.
 Every mutating endpoint calls the command layer, which takes the session lock,
 applies the change, invalidates what it affects, and broadcasts an event on
 `/ws`: `graph_changed`, `node_status`, `run_progress`, `result_ready` and
-`log`. Each event carries its `origin` — `ui` or `mcp` — so the browser can
-show what an agent just did, and the agent can be told what the user changed.
+`log`. Each event carries its `origin` — `ui`, `mcp`, or `repl` for everyone
+else — so the browser can show what an agent just did, and the agent can be told
+what the user changed. The origin travels as a scoped value
+(`Loki.withorigin`), set once by each transport rather than threaded through ten
+mutators, and `run!` captures it onto the `Run`, since the worker outlives the
+request that started it.
+
+An edit invalidates the node and everything downstream, and says which on the
+`graph_changed` event rather than emitting a status event each — that would be
+dozens of messages per keystroke. Chunk progress is throttled to ten events a
+second per target, with the last one always sent.
+
+Each socket is two tasks, a reader and a writer, because `receive` blocks and
+Julia has no `select`; only the writer ever sends, so the 30-second heartbeat
+and the reply to a client's ping are offered into the subscriber's own queue
+rather than written from a second task. That queue is bounded and never blocked
+on — broadcasting happens under the session lock, so a `put!` that waited for
+the slowest reader would hold the lock for everyone — and a subscriber at
+capacity drops events and counts them. Every event carries a monotonic `seq`,
+and a drop is followed by an explicit `desync` carrying the count.
 
 The socket is expected to drop. `tailscale serve` proxies the upgrade, but iOS
 suspends background tabs and closes their sockets, and a phone changes networks.
-The client reconnects with backoff and, on reconnect, refetches `/api/graph` and
-the status of watched nodes rather than trusting that it missed no events.
-Events are a live-update convenience; the REST state is the truth.
+The client reconnects with backoff and refetches `/api/graph` — on reconnect, on
+a `desync`, and on a gap in `seq` — rather than trusting that it missed no
+events. Events are a live-update convenience; the REST state is the truth.
 
 ## MCP mode
 
@@ -942,6 +1016,7 @@ kind does not accept fails on that node rather than silently.
 | `src/export.jl` | `exportjulia` and the script emitter |
 | `src/tables.jl` | table snapshots: `savetable`, `loadtable` and what a script reads them back with |
 | `src/persist.jl` | `.loki.json` save and open |
+| `src/events.jl` | events, subscribers, and the origin of a change |
 | `src/session.jl` | `Session`, named contexts, tables, the command layer and events |
 | `src/server.jl` | HTTP routes, WebSocket, static bundle, `serve` |
 | `src/mcp.jl` | tools, resources, `serve_mcp` |
@@ -952,7 +1027,7 @@ kind does not accept fails on that node rather than silently.
 Exports: `Lags`, `EMA`, `FitARMA`, `FittedARMA`, `ARMAFilter`, `lags`,
 `difference`, `logtransform`, `boxcox`, `ema`, `macd`, `ar`, `fitarma`,
 `applyarma`, `arma`, `fitonce`, `acf`, `pacf`, `ljungbox`, `adftest`,
-`fitreport`, `forecastfan`, `serve`, `serve_mcp`, `exportjulia`.
+`fitreport`, `forecastfan`, `serve`, `serve_mcp` (Milestone 4), `exportjulia`.
 `Loki.Acausal` and its `insample` are not in this list, for CausalFrames'
 reason: acausality is an explicit opt-in.
 
@@ -962,8 +1037,10 @@ loads CausalFrames' three extensions and every operator in the catalog is
 available without the user knowing which package enables it. Also
 StateSpaceModels (with MatrixEquations, already its dependency, for the filter's
 initial covariance), ModelContextProtocol, HTTP, JSON3, DataFrames, Tables,
-StatsBase, HypothesisTests, PrecompileTools, and the `Dates` and
-`LinearAlgebra` stdlibs. Table snapshots go through CausalFrames' own file
+StatsBase, HypothesisTests, StatsFuns, PrecompileTools, and the `Dates`,
+`LinearAlgebra` and `Random` stdlibs. StatsBase and HypothesisTests are imported
+as modules, never `using`'d: `StatsBase.pacf` would clash with Loki's own
+exported `pacf`, and extending it on a `CausalFrame` would be piracy. Table snapshots go through CausalFrames' own file
 operators, so Loki never reaches for `Serialization` itself. StateSpaceModels is imported as a module alias
 (`SSM`), never `using`'d: its `LinearRegression` clashes with CausalFrames'.
 
@@ -976,14 +1053,17 @@ MLJModelInterface runs in its light mode without MLJBase, so an MLJ node needs
 when they are absent.
 
 CausalFrames is not registered. Until it is, `Project.toml` names it in
-`[sources]` by URL, which Julia 1.11 and later read; Julia 1.10 does not, so
-its CI job adds CausalFrames by URL before building. The Manifest stays out of
+`[sources]` by URL, which every supported Julia reads. The Manifest stays out of
 version control.
 
-Package infrastructure follows CausalFrames: Julia 1.10 as the minimum
-(StateSpaceModels and ModelContextProtocol both support it), `test/` with Aqua
-and targeted JET checks, a Documenter site, JuliaFormatter, and this file as the
-source of truth for the design.
+Package infrastructure follows CausalFrames, with **Julia 1.12 as the minimum**.
+Loki is an application, not a library other packages depend on, so it has no
+reason to carry the accommodations an older floor costs: `[sources]` is read
+without a workaround, `mul!` is statically dispatched in the ARMA filter's inner
+loop, and `Base.ScopedValues` carries a command's origin into the run worker.
+The rest follows CausalFrames: `test/` with Aqua and targeted JET checks, a
+Documenter site, JuliaFormatter, and this file as the source of truth for the
+design.
 
 ## Testing
 
@@ -1028,7 +1108,13 @@ source of truth for the design.
    script printer, `exportjulia` with table snapshots, and
    `savesession`/`opensession` for `.loki.json`. Including an exported script
    reproduces the session's frames, and the emitted text is golden-tested.
-3. The server and web app, with diagnostics and the residual panel.
+3. The server and web app, with diagnostics and the residual panel. *Done:*
+   every diagnostic in the table above behind `Loki.diagnostic`, session events
+   with their origin, the HTTP server with its token, cookie, `Origin` and
+   `Host` checks, the WebSocket, and the web app — canvas, palette, inspector,
+   diagnostics and table, on a laptop and on a phone. The Julia suite covers the
+   access-control list bullet by bullet; two Playwright projects, desktop and an
+   iPhone profile that may only tap, drive the app against a live server.
 4. MCP mode.
 5. Breadth: seasonal models in the UI, more diagnostics, undo and redo.
 
@@ -1039,11 +1125,11 @@ source of truth for the design.
   implementation; the command-layer lock is the design's answer either way.
 - **Upstreaming.** Whether `Lags`, `EMA`, `difference` and a `CausalPipeline`
   run accessor belong in CausalFrames.
-- **Shipping the bundle.** Committing `assets/web` is simple but puts built
-  files in version control; an `Artifacts.toml` avoids that at the cost of a
-  release step.
 - **Undo and redo** across two clients: a single linear history, or one per
   origin.
+- **Shipping the bundle to users without Node.** `assets/web` is built, not
+  committed, which is right for the repository; a released package still needs a
+  committed bundle or an `Artifacts.toml`.
 - **Tailscale identity.** `tailscale serve` adds identity headers
   (`Tailscale-User-Login`) to proxied requests. Checking them against an allowed
   login would add a second factor for phone access; whether that is worth

@@ -1,0 +1,926 @@
+/* Layout and components.
+ *
+ * Panels are regions of one grid separated by hairlines, not floating cards:
+ * there is exactly one shadow in the whole interface, under the bottom sheet,
+ * because that is the only thing that genuinely sits above something else.
+ */
+
+.app {
+  display: grid;
+  height: 100dvh;
+  grid-template-columns: 220px 1fr 320px;
+  grid-template-rows: 52px 1fr 40%;
+  grid-template-areas:
+    'bar bar bar'
+    'palette canvas inspector'
+    'palette panels inspector';
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
+}
+
+.app--narrow {
+  grid-template-columns: 1fr;
+  grid-template-rows: 52px 1fr;
+  grid-template-areas:
+    'bar'
+    'canvas';
+}
+
+.region {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.region--palette {
+  grid-area: palette;
+  border-right: 1px solid var(--rule);
+}
+.region--canvas {
+  grid-area: canvas;
+  background: var(--paper);
+}
+.region--panels {
+  grid-area: panels;
+  border-top: 1px solid var(--rule);
+}
+.region--inspector {
+  grid-area: inspector;
+  border-left: 1px solid var(--rule);
+  overflow-y: auto;
+}
+
+.loading {
+  display: grid;
+  place-items: center;
+  height: 100dvh;
+  color: var(--ink-quiet);
+}
+
+/* --- the session bar ------------------------------------------------------ */
+
+.bar {
+  grid-area: bar;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 0 var(--gap);
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel);
+}
+
+/* The one piece of motion in the app: a line that travels while a run is in
+   flight. Reduced motion turns it into a static bar, which still says "busy". */
+.bar__sweep {
+  position: absolute;
+  inset: 0 auto auto 0;
+  height: 2px;
+  width: 28%;
+  background: var(--signal);
+  animation: sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-30%);
+  }
+  to {
+    transform: translateX(390%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar__sweep {
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+.bar__name {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.bar__menu {
+  display: none;
+  min-width: var(--tap);
+  font-size: var(--t-l);
+  line-height: 1;
+}
+
+.bar__window {
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+  white-space: nowrap;
+}
+
+.bar__actions {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.bar button {
+  white-space: nowrap;
+}
+
+.bar__toggles {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  margin-left: auto;
+}
+
+.bar__toggles select {
+  width: auto;
+  min-height: 34px;
+  font-size: var(--t-s);
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--t-s);
+  white-space: nowrap;
+}
+
+.toggle input {
+  width: 20px;
+  height: 20px;
+}
+
+.bar__state {
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+}
+
+.bar__reconnect::before,
+.bar__origin::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+
+.bar__reconnect {
+  color: var(--alarm);
+}
+
+.app--narrow .bar__menu {
+  display: inline-flex;
+}
+
+/* Everything focusable grows to a finger's size below the breakpoint. */
+.app--narrow {
+  --control: var(--tap);
+}
+
+/* The bar keeps one line at any width: the actions scroll sideways rather than
+   wrap, which would push the canvas down on every phone. */
+.app--narrow .bar {
+  gap: 8px;
+  padding: 0 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.app--narrow .bar::-webkit-scrollbar {
+  display: none;
+}
+
+.app--narrow .bar button {
+  padding: 0 10px;
+  font-size: var(--t-s);
+}
+
+.app--narrow .bar__name {
+  font-size: var(--t-s);
+}
+
+.app--narrow button,
+.app--narrow input,
+.app--narrow select,
+.app--narrow textarea {
+  font-size: 16px;
+}
+
+.app--narrow input[type='checkbox'] {
+  width: 26px;
+  height: 26px;
+}
+
+/* React Flow puts its zoom and fit controls bottom left, which is exactly where
+   the sheet is. They move to the top, which no sheet height covers. */
+.app--narrow .react-flow__controls {
+  top: 8px;
+  bottom: auto;
+}
+
+.app--narrow .react-flow__controls button {
+  width: var(--tap);
+  height: var(--tap);
+}
+
+.app--narrow .bar__toggles,
+.app--narrow .bar__window {
+  display: none;
+}
+
+/* --- the node ------------------------------------------------------------- */
+
+.node {
+  position: relative;
+  display: flex;
+  width: 210px;
+  min-height: 52px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.node--selected {
+  border-color: var(--signal);
+  box-shadow: inset 0 0 0 1px var(--signal);
+}
+
+/* The rail is status. Solid ok, red error, and *dashed* for blocked — a chain
+   broken upstream should look broken. */
+.node__rail {
+  flex: 0 0 var(--rail);
+  background: var(--rule);
+}
+
+.node--ok .node__rail {
+  background: var(--signal);
+}
+.node--error .node__rail {
+  background: var(--alarm);
+}
+.node--running .node__rail {
+  background: repeating-linear-gradient(
+    180deg,
+    var(--signal) 0 6px,
+    transparent 6px 10px
+  );
+}
+.node--blocked .node__rail {
+  background: repeating-linear-gradient(
+    180deg,
+    var(--ink-faint) 0 4px,
+    transparent 4px 9px
+  );
+}
+
+/* Acausality is a texture, not a hue: the hatch a fan chart uses for the part
+   you do not know yet. It survives greyscale and colour blindness, and it
+   spreads downstream exactly as the taint does. */
+.node--ahead {
+  border-color: var(--ahead);
+}
+
+.node--ahead .node__body {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--hatch) 0 2px,
+    transparent 2px 9px
+  );
+}
+
+.node--write {
+  border-style: dashed;
+}
+
+.node__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+}
+
+.node__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.node__kind {
+  font-family: var(--mono);
+  font-size: var(--t-s);
+  font-weight: 700;
+}
+
+.node--error .node__kind {
+  color: var(--alarm);
+}
+
+.node__id {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+
+/* The node shows the line of Julia it exports. Reading the canvas is reading
+   the script it becomes. */
+.node__call {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node__callport {
+  display: inline-block;
+  min-width: 4.4em;
+  color: var(--ink-faint);
+}
+
+.node__foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+
+.node__rows {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.node:has(.node__callport) {
+  width: 250px;
+}
+
+.node--compact {
+  width: 150px;
+  min-height: 38px;
+}
+
+.node--compact .node__callport {
+  display: inline-block;
+  min-width: 4.4em;
+  color: var(--ink-faint);
+}
+
+.node__foot {
+  margin-top: 1px;
+}
+
+/* Ports are drawn at 7px and hit-tested at 44: the pseudo-element is the touch
+   target, the box is what you see. */
+.react-flow__handle.port {
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--ink-quiet);
+  border-radius: 1px;
+  background: var(--panel);
+}
+
+.react-flow__handle.port::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: var(--tap);
+  height: var(--tap);
+  transform: translate(-50%, -50%);
+}
+
+.react-flow__handle.port--ahead {
+  border-color: var(--ahead);
+  background: var(--ahead);
+}
+
+.port__label {
+  position: absolute;
+  left: 12px;
+  top: -8px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+.react-flow__edge.edge--ahead .react-flow__edge-path {
+  stroke: var(--ahead);
+  stroke-dasharray: 5 3;
+}
+
+.canvas {
+  height: 100%;
+}
+
+.canvas--placing {
+  cursor: copy;
+}
+
+.canvas--empty {
+  display: grid;
+  place-items: center;
+}
+
+.empty {
+  max-width: 28ch;
+  text-align: center;
+  color: var(--ink-quiet);
+}
+
+/* --- palette -------------------------------------------------------------- */
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--gap);
+  gap: 8px;
+}
+
+.palette__groups {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.palette__group h3 {
+  margin: 10px 0 4px;
+}
+
+.palette__group ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.palette__kind {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  font-size: var(--t-s);
+  text-align: left;
+  cursor: grab;
+}
+
+.palette__kind--armed {
+  background: var(--selected);
+}
+
+.palette__hint {
+  margin: 0;
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+}
+
+.palette__none {
+  color: var(--ink-quiet);
+  font-size: var(--t-s);
+}
+
+.badge {
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.badge--ahead {
+  border: 1px solid var(--ahead);
+  color: var(--ahead);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--hatch) 0 2px,
+    transparent 2px 7px
+  );
+}
+
+/* --- inspector ------------------------------------------------------------ */
+
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding: var(--gap);
+}
+
+.inspector__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inspector__id {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+
+.inspector__doc,
+.inspector__none {
+  margin: 0;
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+}
+
+.inspector__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.field__name {
+  font-size: var(--t-s);
+  font-weight: 600;
+}
+
+.field__required {
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+
+.field__doc {
+  margin: 1px 0 3px;
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.codefield {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.summarizers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.summarizers__entry {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 4px;
+}
+
+.inspector__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--gap);
+  border-top: 1px solid var(--rule);
+}
+
+.portactions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.portactions__name {
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  min-width: 4.5em;
+}
+
+.portactions button {
+  flex: 1;
+  font-size: var(--t-s);
+}
+
+/* Failure is direction, not mood: what went wrong, on which node. */
+.problem {
+  padding: 8px 10px;
+  border-left: var(--rail) solid var(--alarm);
+  background: color-mix(in srgb, var(--alarm) 8%, transparent);
+}
+
+.problem h3 {
+  color: var(--alarm);
+}
+
+.problem__message {
+  margin: 4px 0 0;
+  font-size: var(--t-xs);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* --- panels --------------------------------------------------------------- */
+
+.tabs,
+.diagnostics,
+.table {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.tabs__strip,
+.diagnostics__views,
+.sheet__tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--rule);
+}
+
+.tab {
+  min-height: var(--control);
+  padding: 0 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  font-size: var(--t-s);
+  white-space: nowrap;
+}
+
+.tab--on {
+  border-bottom-color: var(--signal);
+  font-weight: 600;
+}
+
+.tabs__body,
+.diagnostics .panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--gap);
+}
+
+.diagnostics__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+}
+
+.diagnostics__column select {
+  width: auto;
+  min-height: 34px;
+  font-size: var(--t-s);
+}
+
+.diagnostics--none,
+.table--none {
+  display: grid;
+  place-items: center;
+  padding: var(--gap);
+  color: var(--ink-quiet);
+  text-align: center;
+}
+
+.diagnostics__busy {
+  padding: var(--gap);
+  color: var(--ink-quiet);
+}
+
+/* Charts sit directly on the panel with their own axes as the structure; no
+   card border inside a diagnostics view. */
+.plot {
+  width: 100%;
+}
+
+.residuals__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--gap);
+}
+
+.residuals__cell {
+  margin: 0;
+}
+
+.residuals__cell figcaption {
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.verdict {
+  margin: 0 0 var(--gap);
+  padding-left: 10px;
+  border-left: var(--rail) solid var(--signal);
+  font-size: var(--t-s);
+}
+
+.warnings {
+  margin: 0 0 var(--gap);
+  padding-left: 1.2em;
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 4px var(--gap);
+  margin: var(--gap) 0 0;
+  font-size: var(--t-xs);
+}
+
+.summary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 2px;
+}
+
+.summary dt {
+  color: var(--ink-quiet);
+}
+
+.summary dd {
+  margin: 0;
+}
+
+.numbers {
+  width: 100%;
+  margin-top: var(--gap);
+  border-collapse: collapse;
+  font-size: var(--t-xs);
+}
+
+.numbers caption {
+  text-align: left;
+  color: var(--ink-quiet);
+  padding-bottom: 4px;
+}
+
+.numbers th,
+.numbers td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+}
+
+/* The table scrolls inside its own panel, never the page. */
+.table__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table table {
+  border-collapse: collapse;
+  font-size: var(--t-xs);
+}
+
+.table th,
+.table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--ink-faint);
+}
+
+.table__type {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+
+.missing {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.table__pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 6px var(--gap);
+  border-top: 1px solid var(--rule);
+}
+
+.table__range {
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+/* --- the bottom sheet ----------------------------------------------------- */
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+  box-shadow: var(--shadow);
+  /* dvh, not vh: iOS Safari's collapsing toolbar would otherwise hide the
+     sheet's own controls. */
+  transition: height 0.18s ease;
+  padding-bottom: var(--safe-b);
+  z-index: 10;
+}
+
+.sheet--peek {
+  height: calc(56px + var(--safe-b));
+}
+.sheet--half {
+  height: calc(50dvh + var(--safe-b));
+}
+.sheet--full {
+  height: calc(100dvh - 52px);
+}
+
+.sheet__grab {
+  min-height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  touch-action: none;
+}
+
+.sheet__grabline {
+  display: block;
+  width: 38px;
+  height: 4px;
+  margin: 8px auto 4px;
+  border-radius: 2px;
+  background: var(--rule);
+}
+
+.sheet__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sheet--peek .sheet__body {
+  display: none;
+}
+
+/* --- notices -------------------------------------------------------------- */
+
+.notices {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--safe-b) + 16px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.notice {
+  margin: 0;
+  max-width: min(60ch, 90vw);
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--panel);
+  font-size: var(--t-s);
+}
+
+.notice--error {
+  border-color: var(--alarm);
+  border-left-width: var(--rail);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
