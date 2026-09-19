@@ -11,6 +11,26 @@ Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine), 2
 events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
 (MCP mode) is next.
 
+## Layout
+
+- `src/timeseries/`: operators (`operators.jl`) and their summarizer kernels
+  (`summarizers.jl`: Lags, EMA, ARMA); `src/acausal.jl` is the opt-in
+  `Loki.Acausal` module
+- `src/registry.jl`: the node-kind interface (ports, `Param` specs, `build`)
+  and the JSON Schema the inspector and MCP tools share; `src/nodes/` holds the
+  kinds: `causalframes.jl` wraps CausalFrames' operators one to one,
+  `timeseries.jl` Loki's operators and the fit node
+- `src/graph.jl` (nodes, edges), `compile.jl` (pipelines per node, cache
+  substitution, `NodeError`), `engine.jl` (result cache, runs on a worker
+  task), `session.jl` (the session and its lock), `usercode.jl`
+- `src/events.jl`: session events, broadcast under the lock with a monotonic
+  `seq`; `src/server.jl`: static bundle, REST API, WebSocket, access control
+- `src/export.jl` (`exportjulia` and its printer), `persist.jl` (`.loki.json`),
+  `tables.jl` (table snapshots)
+- `web/src/`: React app: `api.ts` REST client, `ws.ts` event socket,
+  `store.ts` state, `components/`; `web/tests/server.jl` is the seeded session
+  Playwright drives
+
 ## Commands
 
 - Run tests: `julia --project -e 'using Pkg; Pkg.test()'` (Aqua, and on
@@ -46,7 +66,11 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
   iPhone profile, against a live `Loki.serve()` that `playwright.config.ts`
   starts). The `web` CI job runs all three. WebKit needs system libraries that
   `npx playwright install --with-deps` installs with root; without them, run the
-  desktop project only
+  desktop project only. For hot reload, run `npm run dev` next to a
+  `Loki.serve()` on its default port 8712: Vite proxies `/api` and `/ws` to it
+- `serve`'s `public_url` defaults to `ENV["LOKI_PUBLIC_URL"]`; it is the
+  address (e.g. a `tailscale serve` URL) added to the allowed `Origin`/`Host`,
+  so remote access fails the checks without it
 
 ## CausalFrames dependency
 
