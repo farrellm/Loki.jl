@@ -42,7 +42,10 @@ export function Diagnostics({
   const [busy, setBusy] = useState(false)
 
   const shape = watched && node ? node.results[watched.port] : undefined
-  const columns = (shape?.columns ?? []).filter((c) => c !== 'time')
+  const columns = useMemo(
+    () => (shape?.columns ?? []).filter((c) => c !== 'time'),
+    [shape],
+  )
 
   useEffect(() => {
     if (column === '' && columns.length > 0) setColumn(columns[0])
@@ -59,6 +62,9 @@ export function Diagnostics({
       setView('residuals')
       setColumn(residual)
     }
+    // Only when the watched port changes: a rerun that renames a column
+    // should not drag the panel back off whatever the reader opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watched?.id, watched?.port])
 
   const load = useCallback(async () => {
