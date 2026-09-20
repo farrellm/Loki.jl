@@ -721,19 +721,25 @@ function mergeparams(current::AbstractDict, given::AbstractDict)
     return merged
 end
 
-# The cached frame a results or diagnostics route is about, and the node it came
-# from. A node that exists but has not been evaluated is a 409 rather than a 404:
-# the client should run it, not go looking for a different id.
-function needsresult(s::Session, req::HTTP.Request)
-    params = HTTP.getparams(req)
-    id = needsnode(s, params["id"])
-    portname = Symbol(params["port"])
-    node = lock(() -> getnode(s.graph, id), s.lock)
+# The cached frame a results or diagnostics request is about, and the node it
+# came from. A node that exists but has not been evaluated is a `NotEvaluated`
+# rather than a `NotFound` — a 409 over HTTP — because the client should run it
+# rather than go looking for a different id. The HTTP method only reads the
+# request; the work is in the other one, so the MCP tools inherit the same
+# discipline instead of writing a second one that drifts.
+needsresult(s::Session, req::HTTP.Request) =
+    needsresult(s, HTTP.getparams(req)["id"], HTTP.getparams(req)["port"],
+        contextname(req))
+
+function needsresult(s::Session, id::AbstractString, port, context::AbstractString)
+    nid = needsnode(s, id)
+    portname = Symbol(port)
+    node = lock(() -> getnode(s.graph, nid), s.lock)
     portname in outputs(nodekind(node.kind)) ||
-        throw(NotFound("node $id ($(node.kind)) has no output port $portname"))
-    frame = result(s, id; port = portname, context = contextname(req))
-    frame === nothing && throw(NotEvaluated("node $id has not been evaluated over \
-        $(repr(contextname(req))); run it first", id, portname))
+        throw(NotFound("node $nid ($(node.kind)) has no output port $portname"))
+    frame = result(s, nid; port = portname, context)
+    frame === nothing && throw(NotEvaluated("node $nid has not been evaluated over \
+        $(repr(context)); run it first", nid, portname))
     return frame, node
 end
 
