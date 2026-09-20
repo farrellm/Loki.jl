@@ -14,9 +14,12 @@ import type { FileEntry, FileListing } from '../types'
 //
 // Not a floating dialog: `app.css` says panels are regions of one grid
 // separated by hairlines, and that there is exactly one shadow in the whole
-// interface. So the picker is a full-width band hanging off the session bar it
-// was opened from — flush to it, hairline edges, no radius, no shadow. The
-// scrim below carries the elevation instead, and the shadow count stays at one.
+// interface. So the picker is a drawer hanging off the session bar it was
+// opened from — flush to the bar and to the left edge, hairline on the two
+// free sides, no radius, no shadow. The scrim behind carries the elevation
+// instead, and the shadow count in the app stays at one. It stops at a
+// readable measure rather than spanning the window, because a file name is
+// text, and it fills the screen below the breakpoint.
 //
 // The path is the subject and the list is a way of editing it. That line is at
 // once the breadcrumb (every ancestor is a button), the file name field, and
