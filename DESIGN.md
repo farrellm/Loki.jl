@@ -927,7 +927,7 @@ and the loop is blocked in `readline`.
 | `get_diagnostic` | a diagnostic's numeric summary: ACF/PACF values and significant lags, test statistics and p-values. The plot-ready `data` is dropped unless `include_data` asks for it — the correlograms and the tests already carry their numbers in the summary, and the fan is the one that does not |
 | `fit_insample` | add a fit node on a port and return its residual summary — Ljung–Box p-values, significant residual ACF lags, information criteria. A fit that cannot be wired is taken back out; one that runs and fails stays, because it is the proposal being judged |
 | `export_julia` | the script |
-| `save`, `open` | persistence |
+| `save`, `open` | persistence; `open` is `opensession!`, so the session the browser is watching is the one that changes |
 | `get_web_url` | the local URL and, when `public_url` is set, the tailnet URL for a phone, to hand to the user |
 
 Resources expose the same state for clients that prefer reading to calling:

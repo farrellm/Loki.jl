@@ -116,10 +116,11 @@ end
         withmcp(; session = s) do c
             r = request(c, "tools/list")
             names = sort([String(t.name) for t in r.result.tools])
-            @test names == sort(["list_node_kinds", "get_graph", "get_web_url", "add_node",
+            @test names == sort(["list_node_kinds", "get_graph", "add_node",
                 "update_node", "remove_node", "connect", "disconnect",
                 "set_context", "load_table", "run", "get_result_summary",
-                "get_diagnostic", "fit_insample"])
+                "get_diagnostic", "fit_insample", "export_julia", "save", "open",
+                "get_web_url"])
             for t in r.result.tools
                 @test !isempty(String(t.description))
                 @test t.inputSchema.type == "object"
@@ -381,6 +382,34 @@ end
                         "order" => [1, 0, 1])))
             @test failed
             @test length(called(c, "get_graph").nodes) == before
+        end
+    end
+
+    @testset "the script and the file" begin
+        withmcp() do c
+            n1, n2, _ = buildchain(c)
+            script = String(called(c, "export_julia", Dict("targets" => [n2])).script)
+            @test occursin(Loki.SCRIPTHEADER, script)
+            @test occursin("ema(:x", script)
+            @test occursin("load(analysis,", script)
+
+            dir = mktempdir()
+            path = joinpath(dir, "analysis.loki.json")
+            @test String(called(c, "save", Dict("path" => path)).path) == path
+            @test isfile(path)
+            @test String(called(c, "get_graph").file) == path
+
+            called(c, "remove_node", Dict("id" => n2))
+            @test length(called(c, "get_graph").nodes) == 1
+            opened = called(c, "open", Dict("path" => path))
+            @test String(opened.path) == path
+            @test opened.seq isa Integer
+            g = called(c, "get_graph")
+            @test sort([String(n.id) for n in g.nodes]) == sort([n1, n2])
+
+            payload, failed = call(c, "open",
+                Dict("path" => joinpath(dir, "nope.loki.json")))
+            @test failed && occursin("nope", String(payload.error))
         end
     end
 

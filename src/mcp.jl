@@ -585,7 +585,74 @@ evaltools(s::Session) = MCP.MCPTool[
         ("from", "params"), handling(args -> fitinsampletool(s, args))),
 ]
 
-mcptools(s::Session) = vcat(readonlytools(s), edittools(s), evaltools(s))
+# --- the script and the file ---------------------------------------------------------
+
+function exportjuliatool(s::Session, args::AbstractDict)
+    mode = Symbol(argstring(args, "tables", "argument"))
+    targets = argvalue(args, "targets") === nothing ? nothing : argtargets(args)
+    return Dict{String,Any}(
+        "script" => exportjulia(s; tables = mode, targets,
+            context = argcontext(args), dir = argstring(args, "dir")),
+    )
+end
+
+savetool(s::Session, args::AbstractDict) =
+    Dict{String,Any}("path" => savesession(needsstring(args, "path"), s))
+
+function opentool(s::Session, args::AbstractDict)
+    path = abspath(expanduser(needsstring(args, "path")))
+    # Checked first, so a missing file is an answer and not a `SystemError`.
+    isfile(path) || throw(NotFound("no session file $(repr(path))"))
+    opensession!(s, path)
+    return Dict{String,Any}("path" => path, "seq" => lock(() -> s.seq, s.lock))
+end
+
+filetools(s::Session) = MCP.MCPTool[
+    mcptool("export_julia",
+        "The graph as a plain Julia script that runs without Loki's server — \
+        the ground truth of what the graph means. It holds what the targets \
+        need and not the rest, so a half-wired node off to one side can no \
+        more fail an export than it fails a run.",
+        Dict(
+            "tables" => Dict{String,Any}("type" => "string",
+                "description" => "how in-memory tables reach the script: as \
+                    arguments to a function, or written beside it as snapshots \
+                    (which needs `dir`)",
+                "enum" => ["argument", "snapshot"]),
+            "targets" => Dict{String,Any}("type" => "array",
+                "description" => "what the script should compute; the last \
+                    run's targets, or every unread output port, by default",
+                "items" => Dict{String,Any}(
+                    "anyOf" => Any[
+                        Dict{String,Any}("type" => "string"),
+                        Dict{String,Any}("type" => "array",
+                            "items" => Dict{String,Any}("type" => "string"),
+                        )],
+                )),
+            "dir" => prop(
+                "string",
+                "the directory the script will live in, \
+                which table snapshots are written to and read back from",
+            ),
+            "context" => contextprop()),
+        (), handling(args -> exportjuliatool(s, args)); readonly = true),
+    mcptool("save",
+        "Write the session to a `.loki.json` file, with its tables beside it. \
+        The whole graph is saved, half-wired nodes included: the file is the \
+        analysis, not a rendering of it.",
+        Dict("path" => prop("string", "where to write it")), ("path",),
+        handling(args -> savetool(s, args))),
+    mcptool("open",
+        "Read a session file into this running session, replacing the graph, \
+        the contexts and the tables. The browser watching this session sees \
+        the new graph; a file Loki cannot rebuild leaves the live one \
+        untouched.",
+        Dict("path" => prop("string", "the session file")), ("path",),
+        handling(args -> opentool(s, args)); destructive = true),
+]
+
+mcptools(s::Session) =
+    vcat(readonlytools(s), edittools(s), evaltools(s), filetools(s))
 
 # --- the resources ---------------------------------------------------------------
 
