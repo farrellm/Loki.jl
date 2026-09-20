@@ -825,7 +825,19 @@ or the cookie.
 | `GET` | `/api/diagnostics/:id/:port/:kind` | a `DiagnosticResult` |
 | `POST` | `/api/nodes/:id/freeze` | freeze output as a table |
 | `GET` | `/api/export` | the Julia script |
-| `GET` / `POST` | `/api/session` | save, open |
+| `GET` | `/api/files` | one directory on the server, for the file picker |
+| `GET` / `PUT` / `POST` | `/api/session` | the current file, save, open |
+
+`/api/files` lists one directory — its subdirectories and files, with each
+file's modified time — so the browser can pick a path to save to or open, and
+later a path for `readcsv`. It is deliberately **not rooted**: an analysis reads
+its data from one directory and saves beside it in another, and a session that
+evaluates source text can already reach the whole filesystem (see "User code"),
+so a root would be a configuration burden rather than a boundary. The token,
+cookie, `Origin` and `Host` checks in front of it are the same ones in front of
+everything else under `/api`. A listing is capped and says when it was cut
+short, because a home directory full of downloads is otherwise a megabyte of
+JSON on a phone's connection.
 
 Every mutating endpoint calls the command layer, which takes the session lock,
 applies the change, invalidates what it affects, and broadcasts an event on

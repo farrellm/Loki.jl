@@ -293,7 +293,7 @@ function graphjson(s::Session; context::AbstractString = "analysis")
                 for (name, t) in sort!(collect(s.tables); by = first)
             ],
             "prelude" => s.usercode.prelude, "nextid" => g.nextid, "seq" => s.seq,
-            "context" => String(context),
+            "context" => String(context), "file" => s.file,
             "running" =>
                 run === nothing ? nothing :
                 Dict{String,Any}(
@@ -621,10 +621,17 @@ function buildrouter(srv::Server)
         r,
         "GET",
         "/api/session",
+        _ -> jsonresponse(Dict("path" => lock(() -> s.file, s.lock))),
+    )
+
+    HTTP.register!(
+        r,
+        "PUT",
+        "/api/session",
         function (req)
-            path = get(query(req), "path", nothing)
-            path === nothing && throw(ArgumentError("saving needs a path"))
-            jsonresponse(Dict("path" => savesession(path, s)))
+            body = readjson(req)
+            haskey(body, "path") || throw(ArgumentError("saving needs a path"))
+            jsonresponse(Dict("path" => savesession(String(body["path"]), s)))
         end,
     )
 
@@ -635,16 +642,76 @@ function buildrouter(srv::Server)
         function (req)
             body = readjson(req)
             haskey(body, "path") || throw(ArgumentError("opening needs a path"))
-            opensession!(s, String(body["path"]))
-            jsonresponse(Dict("path" => String(body["path"]), "seq" => s.seq))
+            path = String(body["path"])
+            # Checked here rather than left to `read`, whose `SystemError` would
+            # reach the browser as an opaque 500.
+            isfile(path) || throw(NotFound("no session file $(repr(path))"))
+            opensession!(s, path)
+            jsonresponse(Dict("path" => path, "seq" => s.seq))
         end,
     )
+
+    HTTP.register!(r, "GET", "/api/files", req -> jsonresponse(listfiles(query(req))))
 
     HTTP.register!(r, "GET", "/api/**", _ -> jsonerror(404, "no such route"))
     return r
 end
 
 contextname(req::HTTP.Request) = String(get(query(req), "context", "analysis"))
+
+# One directory on the machine Loki is running on, for the browser's file
+# picker. Not rooted anywhere: an analysis reads from one directory and saves to
+# another, and a session that evaluates source text can already reach the whole
+# filesystem (see DESIGN.md, "User code"). The token, cookie, `Origin` and
+# `Host` checks are what stand in front of it, as they do in front of everything
+# else under `/api`.
+#
+# A home directory full of downloads would otherwise be a megabyte of JSON on a
+# phone's connection, so a long listing is cut short and says so.
+const MAXENTRIES = 2000
+
+function listfiles(q::AbstractDict)
+    dir = normpath(abspath(expanduser(String(get(q, "path", pwd())))))
+    isdir(dir) || throw(NotFound("no folder $(repr(dir))"))
+    hidden = get(q, "hidden", "false") == "true"
+    names = try
+        readdir(dir; sort = false)
+    catch err
+        err isa InterruptException && rethrow()
+        throw(ArgumentError("Loki cannot read $(repr(dir)): $(sprint(showerror, err))"))
+    end
+    hidden || filter!(name -> !startswith(name, "."), names)
+    entries = Dict{String,Any}[]
+    for name in names
+        entry = fileentry(joinpath(dir, name), name)
+        entry === nothing || push!(entries, entry)
+    end
+    # Directories first, then by name as a reader scans them — case-insensitively,
+    # so `README` does not sort away from `readme`.
+    sort!(entries; by = e -> (!e["dir"], lowercase(e["name"]), e["name"]))
+    truncated = length(entries) > MAXENTRIES
+    truncated && resize!(entries, MAXENTRIES)
+    up = dirname(dir)
+    return Dict{String,Any}("path" => dir, "parent" => up == dir ? nothing : up,
+        "home" => homedir(), "working" => pwd(), "truncated" => truncated,
+        "entries" => entries)
+end
+
+# `nothing` for an entry that cannot be stat'ed — a broken symlink, a mount that
+# is not there any more. One of those is a reason to leave a row out, never to
+# fail the whole listing.
+function fileentry(path::AbstractString, name::AbstractString)
+    return try
+        isdir(path) ? Dict{String,Any}("name" => name, "dir" => true) :
+        Dict{String,Any}("name" => name, "dir" => false,
+            # A `DateTime` already prints as ISO 8601, which is what the
+            # browser parses; the seconds are floored so it stays that short.
+            "modified" => string(Dates.unix2datetime(floor(mtime(path)))))
+    catch err
+        err isa InterruptException && rethrow()
+        nothing
+    end
+end
 
 function mergeparams(current::AbstractDict, given::AbstractDict)
     merged = Dict{String,Any}(current)

@@ -477,10 +477,17 @@ end
             @test occursin("readtable(tables.df)", text)
             @test ask(ctx, "GET", "/api/export?tables=nonsense").status == 400
 
+            # A session that has never been saved is looking at no file.
+            @test asjson(ask(ctx, "GET", "/api/session")).path === nothing
+
             path = joinpath(dir, "saved.loki.json")
-            @test asjson(ask(ctx, "GET", "/api/session?path=$path")).path == path
+            @test asjson(ask(ctx, "PUT", "/api/session"; body = Dict("path" => path))).path ==
+                  path
             @test isfile(path)
-            @test ask(ctx, "GET", "/api/session").status == 400
+            @test ask(ctx, "PUT", "/api/session").status == 400
+            # And now it knows where it is, which is what the browser shows.
+            @test asjson(ask(ctx, "GET", "/api/session")).path == abspath(path)
+            @test asjson(ask(ctx, "GET", "/api/graph")).file == abspath(path)
 
             # Opening replaces what the server is serving, in place: the session
             # object the REPL holds is the one that changes.
@@ -491,8 +498,51 @@ end
                   200
             @test objectid(ctx.s) == before
             @test length(asjson(ask(ctx, "GET", "/api/graph")).nodes) == 2
-            @test ask(ctx, "POST", "/api/session";
-                body = Dict("path" => joinpath(dir, "gone.loki.json"))).status == 500
+            # A file that is not there says so, rather than reading as an
+            # internal error the browser can do nothing with.
+            gone = ask(ctx, "POST", "/api/session";
+                body = Dict("path" => joinpath(dir, "gone.loki.json")))
+            @test gone.status == 404
+            @test occursin("gone.loki.json", asjson(gone).error)
+        end
+    end
+
+    @testset "browsing the server's files" begin
+        dir = mktempdir()
+        mkdir(joinpath(dir, "nested"))
+        mkdir(joinpath(dir, ".git"))
+        write(joinpath(dir, "prices.csv"), "time,close\n1,2\n")
+        write(joinpath(dir, "Analysis.loki.json"), "{}")
+        write(joinpath(dir, ".hidden"), "")
+
+        withserver() do ctx
+            here = asjson(ask(ctx, "GET", "/api/files?path=$dir"))
+            @test here.path == dir
+            @test here.parent == dirname(dir)
+            @test here.truncated == false
+            names = [e.name for e in here.entries]
+            # Directories first, then by name whatever the case.
+            @test names == ["nested", "Analysis.loki.json", "prices.csv"]
+            @test [e.dir for e in here.entries] == [true, false, false]
+            # A directory has no modified time to show; a file does, as ISO 8601.
+            @test !haskey(here.entries[1], :modified)
+            @test occursin(r"^\d{4}-\d{2}-\d{2}T", here.entries[2].modified)
+
+            shown = asjson(ask(ctx, "GET", "/api/files?path=$dir&hidden=true"))
+            @test [e.name for e in shown.entries] ==
+                  [".git", "nested", ".hidden", "Analysis.loki.json", "prices.csv"]
+
+            # No path at all is where the server was started.
+            @test asjson(ask(ctx, "GET", "/api/files")).path == pwd()
+
+            # A file is not a folder, and neither is a folder that is not there.
+            @test ask(ctx, "GET", "/api/files?path=$(joinpath(dir, "prices.csv"))").status ==
+                  404
+            @test ask(ctx, "GET", "/api/files?path=$(joinpath(dir, "nowhere"))").status ==
+                  404
+
+            # The root has no parent to climb to.
+            @test asjson(ask(ctx, "GET", "/api/files?path=/")).parent === nothing
         end
     end
 
