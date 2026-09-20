@@ -228,7 +228,167 @@ function weburls(s::Session)
         "public" => srv.public_url === nothing ? nothing : weburl(srv; public = true))
 end
 
-mcptools(s::Session) = readonlytools(s)
+# --- editing the graph ------------------------------------------------------------
+#
+# Each of these returns what its REST twin returns, so the two layers read alike
+# and a browser refetching after an agent's edit sees the same thing the agent
+# was told. The per-kind parameter schema is not on these tools — one `add_node`
+# cannot carry forty-nine of them — so `params` is an open object here and
+# `list_node_kinds` is where its schema comes from.
+
+function argposition(args::AbstractDict)
+    v = argvalue(args, "position")
+    v === nothing && return (0.0, 0.0)
+    (v isa AbstractVector && length(v) == 2 && all(x -> x isa Real, v)) ||
+        throw(ArgumentError("position must be [x, y], two numbers"))
+    return (Float64(v[1]), Float64(v[2]))
+end
+
+nodepayload(s::Session, id::AbstractString) =
+    Dict{String,Any}("node" => nodeevent(lock(() -> getnode(s.graph, id), s.lock)))
+
+function addnodetool(s::Session, args::AbstractDict)
+    id = addnode!(s, needsstring(args, "kind"), argdict(args, "params");
+        id = argstring(args, "id"), position = argposition(args))
+    return merge(Dict{String,Any}("id" => id), nodepayload(s, id))
+end
+
+function updatenodetool(s::Session, args::AbstractDict)
+    id = needsnode(s, needsstring(args, "id"))
+    params = argvalue(args, "params")
+    position = argvalue(args, "position")
+    (params === nothing && position === nothing) &&
+        throw(ArgumentError("give params, position, or both"))
+    # Merged, not replaced, and a `null` removes one — `PATCH /api/nodes/:id`'s
+    # rule, for its reason: two quick edits built from the same copy would
+    # silently undo one another.
+    params === nothing || updatenode!(s, id,
+        mergeparams(lock(() -> getnode(s.graph, id).params, s.lock),
+            argdict(args, "params")))
+    position === nothing || setposition!(s, id, argposition(args))
+    return nodepayload(s, id)
+end
+
+function removenodetool(s::Session, args::AbstractDict)
+    removenode!(s, needsnode(s, needsstring(args, "id")))
+    return Dict{String,Any}("ok" => true)
+end
+
+connecttool(s::Session, args::AbstractDict) =
+    Dict{String,Any}(
+        "id" => connect!(s, argport(args, "from"), argport(args, "to");
+            id = argstring(args, "id")),
+    )
+
+function disconnecttool(s::Session, args::AbstractDict)
+    id = needsstring(args, "id")
+    lock(s.lock) do
+        any(e -> e.id == id, s.graph.edges) ||
+            throw(NotFound("no edge $(repr(id))"))
+    end
+    disconnect!(s, id)
+    return Dict{String,Any}("ok" => true)
+end
+
+function setcontexttool(s::Session, args::AbstractDict)
+    name = needsstring(args, "name")
+    ctx = readcontext((; timetype = needsstring(args, "timetype"),
+        start = needsarg(args, "start"), stop = needsarg(args, "stop")))
+    setcontext!(s, name, ctx)
+    return Dict{String,Any}("name" => name, "context" => contextevent(ctx))
+end
+
+# A CSV or parquet on the machine Loki runs on, read into memory through the
+# same DuckDB reader an upload from the browser goes through.
+function loadtabletool(s::Session, args::AbstractDict)
+    name = needsstring(args, "name")
+    path = abspath(expanduser(needsstring(args, "path")))
+    isfile(path) || throw(NotFound("no file $(repr(path))"))
+    format = argstring(args, "format")
+    table = readuploadedtable(read(path), format === nothing ? tableformat(path) : format)
+    addtable!(s, name, table)
+    return Dict{String,Any}("name" => name, "path" => path,
+        "table" => tableevent(lock(() -> s.tables[name], s.lock)))
+end
+
+function tableformat(path::AbstractString)
+    ext = lowercase(last(splitext(path)))
+    ext == ".csv" && return "csv"
+    ext in (".parquet", ".pq") && return "parquet"
+    return throw(ArgumentError("cannot tell the format of $(repr(path)) from its \
+        extension; pass format as \"csv\" or \"parquet\""))
+end
+
+edittools(s::Session) = MCP.MCPTool[
+    mcptool("add_node",
+        "Add a node. `params` is the kind's own parameter object, whose JSON \
+        Schema `list_node_kinds` publishes for that kind — a parameter may be \
+        left out while the node is still being built up. Returns the new \
+        node's id, which is what `connect` takes.",
+        Dict("kind" => prop("string", "the node kind, from `list_node_kinds`"),
+            "params" => Dict{String,Any}("type" => "object",
+                "description" => "the kind's parameters"),
+            "id" => prop("string", "an id to give it, rather than the next one"),
+            "position" => Dict{String,Any}("type" => "array",
+                "description" => "where it sits on the canvas, as [x, y]",
+                "minItems" => 2, "maxItems" => 2,
+                "items" => Dict{String,Any}("type" => "number"))),
+        ("kind",), handling(args -> addnodetool(s, args))),
+    mcptool("update_node",
+        "Change a node's parameters or move it. The parameters given are \
+        merged into the node's, and a null removes one, so changing a single \
+        parameter takes a single key. Editing parameters invalidates the node \
+        and everything downstream; moving it does not.",
+        Dict("id" => prop("string", "the node"),
+            "params" => Dict{String,Any}("type" => "object",
+                "description" => "parameters to merge in; a null removes one"),
+            "position" => Dict{String,Any}("type" => "array",
+                "description" => "where it sits on the canvas, as [x, y]",
+                "minItems" => 2, "maxItems" => 2,
+                "items" => Dict{String,Any}("type" => "number"))),
+        ("id",), handling(args -> updatenodetool(s, args))),
+    mcptool("remove_node",
+        "Remove a node and every edge touching it.",
+        Dict("id" => prop("string", "the node")), ("id",),
+        handling(args -> removenodetool(s, args)); destructive = true),
+    mcptool("connect",
+        "Connect an output port to an input port. A single-input port takes \
+        one edge; a variadic one takes them in order. A connection that would \
+        make a cycle is refused.",
+        Dict("from" => portprop("the source, as [node_id, output_port]"),
+            "to" => portprop("the destination, as [node_id, input_port]"),
+            "id" => prop("string", "an id to give the edge")),
+        ("from", "to"), handling(args -> connecttool(s, args))),
+    mcptool("disconnect", "Remove one edge, by its id.",
+        Dict("id" => prop("string", "the edge")), ("id",),
+        handling(args -> disconnecttool(s, args)); destructive = true),
+    mcptool("set_context",
+        "Define or redefine a named evaluation window. A session always has \
+        `analysis`, the window nodes are run over; more — `train`, `test`, a \
+        short `preview` — are named by node parameters and by `run`. The time \
+        type must match the sources'.",
+        Dict("name" => prop("string", "the context's name"),
+            "timetype" => Dict{String,Any}("type" => "string",
+                "description" => "the time column's type",
+                "enum" => ["Int64", "Float64", "Date", "DateTime"]),
+            "start" => Dict{String,Any}("description" => "the window's start, \
+                a number or an ISO 8601 date or timestamp"),
+            "stop" => Dict{String,Any}("description" => "the window's stop")),
+        ("name", "timetype", "start", "stop"),
+        handling(args -> setcontexttool(s, args))),
+    mcptool("load_table",
+        "Read a CSV or parquet file on the machine Loki runs on into memory \
+        under a name, which a `table` or `lookupjoin` node then refers to.",
+        Dict("name" => prop("string", "the name to hold it under"),
+            "path" => prop("string", "the file, on the server's filesystem"),
+            "format" => Dict{String,Any}("type" => "string",
+                "description" => "the file's format; taken from the extension \
+                    when it is not given",
+                "enum" => ["csv", "parquet"])),
+        ("name", "path"), handling(args -> loadtabletool(s, args))),
+]
+
+mcptools(s::Session) = vcat(readonlytools(s), edittools(s))
 
 # --- the resources ---------------------------------------------------------------
 

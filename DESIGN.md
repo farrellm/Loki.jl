@@ -919,9 +919,9 @@ and the loop is blocked in `readline`.
 |---|---|
 | `list_node_kinds` | the catalog — names, categories, ports — and, for one `kind` or one `category`, each kind's `paramschema` |
 | `get_graph` | nodes, edges, params, status, taint |
-| `add_node`, `update_node`, `remove_node` | edit nodes; `input_schema` comes from the kind's `paramschema` |
+| `add_node`, `update_node`, `remove_node` | edit nodes; `params` is an open object, because one tool cannot carry forty-nine schemas — the kind's `paramschema` comes from `list_node_kinds`, so the user and an agent still edit one vocabulary. `update_node` merges, and a `null` removes, exactly as `PATCH` does |
 | `connect`, `disconnect` | edit edges |
-| `set_context`, `load_table` | session state |
+| `set_context`, `load_table` | session state; `load_table` reads a CSV or parquet path through the same DuckDB reader an upload goes through |
 | `run` | evaluate nodes, with progress through `send_progress` fed by the engine's stream loop |
 | `get_result_summary` | schema, row count, per-column summary statistics, head and tail |
 | `get_diagnostic` | a diagnostic's numeric summary: ACF/PACF values and significant lags, test statistics and p-values |
