@@ -35,6 +35,9 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
 
 - Run tests: `julia --project -e 'using Pkg; Pkg.test()'` (Aqua, and on
   released Julia versions the targeted JET checks in `test/jet.jl`)
+- A test file cannot be `include`d on its own: `persist.jl` needs `simulate`
+  from `arma.jl` and `comparable` from `export.jl`, and all of them need
+  `fixtures.jl`. Run the whole suite — it takes about five minutes
 - Build docs: `julia --project=docs docs/make.jl` (one-time setup:
   `julia --project=docs -e 'using Pkg; Pkg.instantiate()'`; `docs/Project.toml`
   sources Loki from `..`, so after adding a dependency run
@@ -68,6 +71,17 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
   `npx playwright install --with-deps` installs with root; without them, run the
   desktop project only. For hot reload, run `npm run dev` next to a
   `Loki.serve()` on its default port 8712: Vite proxies `/api` and `/ws` to it
+- The web sources have **no prettier and no eslint** — match the house style by
+  hand (no semicolons, single quotes). `npx prettier` installs an ad-hoc copy
+  and rewrites whole files to its own defaults. `npm run build` runs
+  `tsc --noEmit` first, so it is the typecheck too
+- To look at a change in a real browser: `npm run build`, then
+  `LOKI_TEST_PORT=8719 LOKI_TEST_TOKEN=dev julia --project web/tests/server.jl`
+  — the seeded session, on a port of its own. The server reads `assets/web`
+  from disk, so rebuild before reloading
+- Playwright runs `workers: 1`, `fullyParallel: false`, and both projects share
+  one `Loki.serve()`: a spec must not assume session state its own `open(page)`
+  did not reset — that helper deletes nodes and nothing else
 - `serve`'s `public_url` defaults to `ENV["LOKI_PUBLIC_URL"]`; it is the
   address (e.g. a `tailscale serve` URL) added to the allowed `Origin`/`Host`,
   so remote access fails the checks without it
@@ -116,6 +130,10 @@ same reason StateSpaceModels is `import StateSpaceModels as SSM`: its
   functions are callable structs with their column names as type parameters.
 - A new exported name also goes in DESIGN.md's export list, an `@docs` block
   under `docs/src/`, and `src/precompile.jl`'s workload.
+- `web/src/theme.css` and `app.css`'s header are the design contract: six
+  functional colour tokens, hairlines rather than cards, exactly one shadow
+  (the bottom sheet) and one animation (the run sweep), 3px radii. New UI
+  extends it rather than adding tokens or floating a card.
 - Every operator gets a node kind in `src/nodes/` (an `OpKind` with `Param`
   specs; JSON-like values, Julia values as source text).
 - Source-text parameters are evaluated in the session's `UserCode` module, so
