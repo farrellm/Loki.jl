@@ -991,6 +991,9 @@ That directory is Loki's, so saving again sweeps the snapshots nothing reference
 any more (a table dropped or renamed, or a frame that now needs JLS where it
 needed parquet), leaving anything else in it alone; a script's directory is the
 caller's and is never swept.
+A session remembers the file it was last saved to or opened from, as
+`Session.file`, so a second save overwrites it without being told where again
+and a browser can show what it is looking at; `reset!` forgets it.
 Parameters hold source text, never evaluated values, so a session file is as
 portable as the exported script. The graph's next id is saved with it, so an id
 freed before saving is not handed out again after opening; opening adds every
