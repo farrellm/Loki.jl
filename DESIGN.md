@@ -899,11 +899,25 @@ A Claude Code configuration is one line:
 The server is built with **ModelContextProtocol.jl**: `mcp_server(name = "loki", tools, resources)`
 with its default stdio transport, and `start!(server)` on its own task, after the
 web server is up. Tool handlers run on that task and reach the session only
-through the command layer, whose lock serializes them against browser requests.
+through the command layer, whose lock serializes them against browser requests,
+under `withorigin(:mcp)` — the counterpart of the `withorigin(:ui)` the HTTP
+handler sets, and what lets the browser show what the agent just did.
+
+`start!` **blocks** in its read loop until stdin closes, which is why
+`serve_mcp` blocks too: the configuration above is a process whose job is to be
+that server, and a `serve_mcp` that returned would end it. `wait = false` leaves
+the loop on its own task, for the REPL and for the tests, and `transport` takes
+a `StdioTransport` over any pair of streams, which is how the tests drive it
+over a pipe without a second Julia. `start!` also installs its own global
+logger, so that `@info` reaches the client as `notifications/message`, and never
+takes it back; `stop!` returns the one it displaced, so a session served and
+stopped inside a larger process leaves logging as it found it. Ending the loop
+means closing the transport's input: `close` on the transport only flips a flag,
+and the loop is blocked in `readline`.
 
 | Tool | Purpose |
 |---|---|
-| `list_node_kinds` | kinds, ports, and each kind's param schema |
+| `list_node_kinds` | the catalog — names, categories, ports — and, for one `kind` or one `category`, each kind's `paramschema` |
 | `get_graph` | nodes, edges, params, status, taint |
 | `add_node`, `update_node`, `remove_node` | edit nodes; `input_schema` comes from the kind's `paramschema` |
 | `connect`, `disconnect` | edit edges |

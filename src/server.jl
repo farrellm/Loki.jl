@@ -41,6 +41,9 @@ mutable struct Server
     hosts::Set{String}
     # The router closes over this struct, so it is set once the struct exists.
     router::Any
+    # The `Loki.MCPMode` beside it under `serve_mcp`, or nothing. Untyped, like
+    # `Session.server`, because MCP mode is defined after this.
+    mcp::Any
 end
 
 """
@@ -1123,7 +1126,8 @@ function serve(s::Session; port::Integer = 8712,
     srv = Server(s, String(token),
         public_url === nothing ? nothing : String(public_url),
         normpath(String(assets)), Any[], Subscriber[], Threads.Event(),
-        ReentrantLock(), nothing, Int(port), Set{String}(), Set{String}(), nothing)
+        ReentrantLock(), nothing, Int(port), Set{String}(), Set{String}(), nothing,
+        nothing)
     srv.router = buildrouter(srv)
     http = HTTP.serve!("127.0.0.1", Int(port); stream = true, listenany = port == 0,
         verbose = -1) do stream
@@ -1148,8 +1152,9 @@ serve(; tables = (;), contexts = (;), prelude::AbstractString = "",
     Loki.stop!(s::Session) -> Session
     Loki.stop!(srv::Loki.Server) -> Loki.Server
 
-Stop serving: close the listener and every open WebSocket, and leave no task
-behind. A session that is not being served is left alone.
+Stop serving: close the listener and every open WebSocket, end the MCP read loop
+if [`serve_mcp`](@ref) started one, and leave no task behind. A session that is
+not being served is left alone.
 """
 function stop!(srv::Server)
     # Order matters. Closing the subscribers ends every writer task; closing the
@@ -1178,6 +1183,7 @@ function stop!(srv::Server)
     catch err
         err isa InterruptException && rethrow()
     end
+    stopmcp!(srv)
     lock(() -> (srv.session.server = nothing), srv.session.lock)
     return srv
 end
