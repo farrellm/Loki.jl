@@ -54,8 +54,7 @@ export default function App() {
     }
   }, [store.watched, wide])
 
-  const watchedNode =
-    store.graph?.nodes.find((n) => n.id === store.watched?.id) ?? null
+  const watchedNode = store.graph?.nodes.find((n) => n.id === store.watched?.id) ?? null
 
   const canvas = (
     <Canvas

@@ -91,7 +91,10 @@ export function useSession() {
         onEvent: (event: LokiEvent) => {
           if (event.origin) setLastOrigin(event.origin)
           if (event.event === 'log') {
-            note(event.payload.message, event.payload.level === 'error' ? 'error' : 'info')
+            note(
+              event.payload.message,
+              event.payload.level === 'error' ? 'error' : 'info',
+            )
           }
           // Every event changes something the graph request answers for, and a
           // local server answers it in milliseconds.

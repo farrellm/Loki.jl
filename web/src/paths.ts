@@ -57,7 +57,19 @@ export function formatModified(iso: string | undefined, now = new Date()): strin
   return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
-    'Oct', 'Nov', 'Dec']
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+]
 
 const pad = (n: number) => String(n).padStart(2, '0')

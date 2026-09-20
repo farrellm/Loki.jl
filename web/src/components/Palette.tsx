@@ -67,9 +67,7 @@ export function Palette({
                       e.dataTransfer.setData('application/loki-kind', kind.name)
                       e.dataTransfer.effectAllowed = 'copy'
                     }}
-                    onClick={() =>
-                      onPick(pendingKind === kind.name ? null : kind.name)
-                    }
+                    onClick={() => onPick(pendingKind === kind.name ? null : kind.name)}
                   >
                     <span className="mono">{kind.name}</span>
                     {kind.acausal.length > 0 && (

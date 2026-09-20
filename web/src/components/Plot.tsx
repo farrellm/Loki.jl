@@ -70,7 +70,11 @@ function themed(): Partial<Plotly.Layout> {
   }
 }
 
-export function Plot({ spec, height = 200, label }: {
+export function Plot({
+  spec,
+  height = 200,
+  label,
+}: {
   spec: PlotSpec
   height?: number
   label: string
@@ -83,13 +87,18 @@ export function Plot({ spec, height = 200, label }: {
     let live = true
     void library().then((P) => {
       if (!live) return
-      void P.react(element, spec.data as never, { ...themed(), ...spec.layout }, {
-        displayModeBar: false,
-        responsive: true,
-        scrollZoom: true,
-        // Pinch-zoom and drag-to-pan both reach the plot rather than the page.
-        doubleClick: 'reset',
-      })
+      void P.react(
+        element,
+        spec.data as never,
+        { ...themed(), ...spec.layout },
+        {
+          displayModeBar: false,
+          responsive: true,
+          scrollZoom: true,
+          // Pinch-zoom and drag-to-pan both reach the plot rather than the page.
+          doubleClick: 'reset',
+        },
+      )
     })
     return () => {
       live = false

@@ -182,8 +182,8 @@ function CanvasSurface({ store, compact, pendingKind, onPlaced }: CanvasProps) {
         <div className="empty">
           <h2>Nothing here yet</h2>
           <p>
-            Pick a source from the palette to read your data in — a table you
-            passed from the REPL, or a CSV on disk.
+            Pick a source from the palette to read your data in — a table you passed from
+            the REPL, or a CSV on disk.
           </p>
         </div>
       </div>

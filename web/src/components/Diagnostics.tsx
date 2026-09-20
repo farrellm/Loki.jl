@@ -16,8 +16,16 @@ import type { Diagnostic, GraphNode, Watched } from '../types'
 // in one view, so changing an order and looking again is a glance rather than
 // six separate questions.
 
-const VIEWS = ['series', 'acf', 'pacf', 'distribution', 'stationarity', 'residuals',
-  'forecast', 'fit'] as const
+const VIEWS = [
+  'series',
+  'acf',
+  'pacf',
+  'distribution',
+  'stationarity',
+  'residuals',
+  'forecast',
+  'fit',
+] as const
 type View = (typeof VIEWS)[number]
 
 export function Diagnostics({
@@ -137,11 +145,7 @@ const LABELS: Record<View, string> = {
 }
 
 function kindOf(view: View): string {
-  return view === 'distribution'
-    ? 'histogram'
-    : view === 'stationarity'
-      ? 'adf'
-      : view
+  return view === 'distribution' ? 'histogram' : view === 'stationarity' ? 'adf' : view
 }
 
 function Panel({ result, view }: { result: Diagnostic; view: View }) {
@@ -273,7 +277,11 @@ function LjungBox({ result }: { result: Diagnostic }) {
 
 function Numbers({ summary }: { summary: Record<string, any> }) {
   const scalars = Object.entries(summary).filter(
-    ([, v]) => v === null || typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean',
+    ([, v]) =>
+      v === null ||
+      typeof v === 'number' ||
+      typeof v === 'string' ||
+      typeof v === 'boolean',
   )
   if (scalars.length === 0) return null
   return (

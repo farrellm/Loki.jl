@@ -246,9 +246,14 @@ export function FilePicker({
             const usable = entry.dir || matchesSuffix(entry.name, suffixes)
             if (!usable) {
               return (
-                <li key={entry.name} className="picker__entry picker__entry--unusable mono">
+                <li
+                  key={entry.name}
+                  className="picker__entry picker__entry--unusable mono"
+                >
                   <span>{entry.name}</span>
-                  <span className="picker__when num">{formatModified(entry.modified)}</span>
+                  <span className="picker__when num">
+                    {formatModified(entry.modified)}
+                  </span>
                 </li>
               )
             }
@@ -263,7 +268,9 @@ export function FilePicker({
                   onClick={() => pick(entry)}
                 >
                   <span>{entry.dir ? entry.name + '/' : entry.name}</span>
-                  <span className="picker__when num">{formatModified(entry.modified)}</span>
+                  <span className="picker__when num">
+                    {formatModified(entry.modified)}
+                  </span>
                 </button>
               </li>
             )
@@ -297,7 +304,8 @@ export function FilePicker({
 }
 
 const isTextEntry = (target: EventTarget | null) =>
-  target instanceof HTMLElement && (target.tagName === 'INPUT' || target.isContentEditable)
+  target instanceof HTMLElement &&
+  (target.tagName === 'INPUT' || target.isContentEditable)
 
 // The band is modal, so Tab stays inside it. There is nothing else in the app
 // that needs this, which is why it lives here rather than in a helper module.
