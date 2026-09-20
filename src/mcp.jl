@@ -388,7 +388,204 @@ edittools(s::Session) = MCP.MCPTool[
         ("name", "path"), handling(args -> loadtabletool(s, args))),
 ]
 
-mcptools(s::Session) = vcat(readonlytools(s), edittools(s))
+# --- evaluating and reading back ---------------------------------------------------
+
+# A target is a node id, for all of its output ports, or one `[id, port]` — the
+# shapes `POST /api/run` and `Loki.run!` already take.
+function argtargets(args::AbstractDict)
+    v = needsarg(args, "targets")
+    (v isa AbstractVector && !isempty(v)) ||
+        throw(ArgumentError("targets must be a non-empty list of node ids or \
+            [node_id, port] pairs"))
+    return Any[
+        t isa AbstractVector ? (asstring(t[1]), Symbol(asstring(t[2]))) :
+        asstring(t) for t in v
+    ]
+end
+
+# The engine calls this once per chunk per target, which is far more often than
+# a client wants to hear; throttled to the interval the event stream uses. The
+# reported number is cumulative because MCP progress must not go backwards.
+function progressreporter(ctx)
+    last = Ref(0.0)
+    seen = Threads.Atomic{Int}(0)
+    return function (id::AbstractString, port::Symbol, rows::Integer)
+        total = Threads.atomic_add!(seen, Int(rows)) + Int(rows)
+        now = time()
+        now - last[] < PROGRESSINTERVAL && return nothing
+        last[] = now
+        quietly(
+            () -> MCP.send_progress(ctx, Float64(total);
+                message = "$id.$port: $total rows"),
+        )
+        return nothing
+    end
+end
+
+function runtool(s::Session, args::AbstractDict, ctx)
+    context = argcontext(args)
+    run = run!(s, argtargets(args); context, progress = progressreporter(ctx))
+    Base.wait(run)
+    return runreport(s, run, context)
+end
+
+function runreport(s::Session, run::Run, context::AbstractString)
+    targets = Any[targetreport(s, id, port, context) for (id, port) in run.targets]
+    # Which node actually failed is rarely the target: a target is `blocked` and
+    # the error is upstream, so the whole error map goes back with the report.
+    failed = lock(s.lock) do
+        Dict{String,Any}(id => sprint(showerror, e) for (id, e) in s.errors)
+    end
+    return Dict{String,Any}("context" => context, "targets" => targets,
+        "cancelled" => run.cancelled[], "errors" => failed)
+end
+
+function targetreport(s::Session, id::AbstractString, port::Symbol,
+    context::AbstractString)
+    out = Dict{String,Any}("id" => String(id), "port" => String(port),
+        "status" => String(status(s, id)), "acausal" => isacausal(s, id; port))
+    frame = result(s, id; port, context)
+    frame === nothing || merge!(out, frameevent(frame))
+    err = nodeerror(s, id)
+    err === nothing || (out["error"] = sprint(showerror, err))
+    return out
+end
+
+# A node's output port, defaulting to its first — the HTTP routes take it from
+# the path and so always have one.
+function argresult(s::Session, args::AbstractDict)
+    id = needsnode(s, needsstring(args, "id"))
+    port = argvalue(args, "port")
+    portname = lock(() -> outputport(s, id, port), s.lock)
+    return needsresult(s, id, portname, argcontext(args))
+end
+
+resultsummarytool(s::Session, args::AbstractDict) =
+    resultsummary(first(argresult(s, args)); columns = querycolumns(args),
+        key = querykey(args), head = queryint(args, "head", 5),
+        tail = queryint(args, "tail", 5))
+
+# A diagnostic without its plot-ready arrays. `acf` and `pacf` already carry
+# their values and their significant lags in the summary, and a test carries its
+# statistic and p-values, so dropping `data` costs an agent nothing it asked
+# for — except for the forecast fan, which is why `include_data` exists.
+function diagnosticsummary(r::DiagnosticResult; data::Bool = false)
+    out = Dict{String,Any}("kind" => String(r.kind), "summary" => r.summary,
+        "warnings" => r.warnings)
+    isempty(r.panels) || (
+        out["panels"] = Dict{String,Any}(
+            k => diagnosticsummary(v; data) for (k, v) in r.panels)
+    )
+    data && (out["data"] = r.data)
+    return out
+end
+
+function diagnostictool(s::Session, args::AbstractDict)
+    frame, node = argresult(s, args)
+    kind = needsstring(args, "kind")
+    params = diagnosticparams(s, node, kind, argcontext(args), argdict(args, "params"))
+    return diagnosticsummary(diagnostic(frame, kind; params);
+        data = querybool(args, "include_data", false))
+end
+
+# One step of the identification loop: fit a model on a port, run the in-sample
+# residuals, and report what they say about it. The node stays in the graph — it
+# is the thing being proposed — but a fit that cannot even be wired is taken
+# back out, so a rejected proposal leaves nothing behind.
+function fitinsampletool(s::Session, args::AbstractDict)
+    from = argport(args, "from")
+    params = argdict(args, "params")
+    haskey(params, "column") ||
+        throw(ArgumentError("a fit needs the column it is fitted to"))
+    id = addnode!(s, "fit", params; position = argposition(args))
+    try
+        connect!(s, from, (id, :in))
+    catch
+        removenode!(s, id)
+        rethrow()
+    end
+    context = argcontext(args)
+    run = run!(s, [(id, :insample)]; context)
+    Base.wait(run)
+    out = merge(Dict{String,Any}("id" => id), runreport(s, run, context))
+    frame = result(s, id; port = :insample, context)
+    frame === nothing && return out
+    node = lock(() -> getnode(s.graph, id), s.lock)
+    residualparams = diagnosticparams(s, node, "residuals", context,
+        Dict{String,Any}("column" => params["column"]))
+    out["residuals"] =
+        diagnosticsummary(diagnostic(frame, "residuals"; params = residualparams))
+    return out
+end
+
+evaltools(s::Session) = MCP.MCPTool[
+    mcptool("run",
+        "Evaluate nodes and wait for them. A target is a node id, for all of \
+        its output ports, or a [node_id, port] pair. Reports each target's \
+        status, row count and columns, and every node that errored — which is \
+        rarely the target, because a target downstream of a failure is \
+        `blocked` and the error is upstream.",
+        Dict(
+            "targets" => Dict{String,Any}("type" => "array",
+                "description" => "node ids, or [node_id, port] pairs",
+                "items" => Dict{String,Any}(
+                    "anyOf" => Any[
+                        Dict{String,Any}("type" => "string"),
+                        Dict{String,Any}("type" => "array",
+                            "items" => Dict{String,Any}("type" => "string"),
+                        )],
+                )),
+            "context" => contextprop()),
+        ("targets",), handlingctx((args, ctx) -> runtool(s, args, ctx))),
+    mcptool("get_result_summary",
+        "What a node produced, sized for reading: the schema, the row count, a \
+        statistic per column, and the first and last few rows. Run the node \
+        first — an unevaluated node says so rather than pretending to be empty.",
+        Dict("id" => prop("string", "the node"),
+            "port" => prop("string", "its output port; the first by default"),
+            "context" => contextprop(),
+            "columns" => prop("string", "only these columns, comma-separated"),
+            "key" => prop("string", "only the rows matching, as \"col=value\""),
+            "head" => prop("integer", "rows from the start; 5 by default"),
+            "tail" => prop("integer", "rows from the end; 5 by default")),
+        ("id",), handling(args -> resultsummarytool(s, args)); readonly = true),
+    mcptool("get_diagnostic",
+        "Run a diagnostic over a node's output and return its numeric summary: \
+        ACF and PACF values with the lags outside the significance band, a \
+        test's statistic and p-values, a fit's information criteria. The \
+        plot-ready arrays are left out unless `include_data` asks for them — \
+        the user has the plot in the browser.",
+        Dict("id" => prop("string", "the node"),
+            "port" => prop("string", "its output port; the first by default"),
+            "kind" => Dict{String,Any}("type" => "string",
+                "description" => "the diagnostic to run", "enum" => diagnostics()),
+            "params" => Dict{String,Any}("type" => "object",
+                "description" => "the diagnostic's arguments: `column`, `lags`, \
+                    `key`, `level`, and whatever else it takes"),
+            "include_data" => prop("boolean",
+                "also return the plot-ready arrays; false by default"),
+            "context" => contextprop()),
+        ("id", "kind"), handling(args -> diagnostictool(s, args)); readonly = true),
+    mcptool("fit_insample",
+        "Propose a fit and check it in one step: add a `fit` node on an output \
+        port, run its acausal in-sample residuals, and report what they say — \
+        Ljung–Box p-values at several lag counts, the residual lags outside \
+        the band, and the fit's information criteria. The node stays in the \
+        graph under the id this returns, so a promising fit is already wired.",
+        Dict("from" => portprop("the series to fit, as [node_id, output_port]"),
+            "params" => Dict{String,Any}("type" => "object",
+                "description" => "the `fit` kind's parameters — `family`, \
+                    `column`, `order` and the rest; `list_node_kinds` with \
+                    kind \"fit\" has the schema"),
+            "position" => Dict{String,Any}("type" => "array",
+                "description" => "where the new node sits, as [x, y]",
+                "minItems" => 2, "maxItems" => 2,
+                "items" => Dict{String,Any}("type" => "number")),
+            "context" => contextprop()),
+        ("from", "params"), handling(args -> fitinsampletool(s, args))),
+]
+
+mcptools(s::Session) = vcat(readonlytools(s), edittools(s), evaltools(s))
 
 # --- the resources ---------------------------------------------------------------
 
@@ -398,7 +595,20 @@ mcpresources(s::Session) = MCP.MCPResource[
     mime_type = "application/json", data_provider = () -> graphjson(s)),
 ]
 
-mcptemplates(::Session) = MCP.ResourceTemplate[]
+mcptemplates(s::Session) = MCP.ResourceTemplate[
+    MCP.ResourceTemplate(; name = "node result",
+    uri_template = "loki://node/{id}/result", mime_type = "application/json",
+    description = "A node's output over the analysis context, as \
+            `get_result_summary` returns it for its first port.",
+    data_provider = (_, vars) -> noderesult(s, vars)),
+]
+
+function noderesult(s::Session, vars)
+    id = needsnode(s, String(vars["id"]))
+    frame, _ = needsresult(s, id, lock(() -> outputport(s, id, nothing), s.lock),
+        "analysis")
+    return resultsummary(frame)
+end
 
 # --- starting and stopping ---------------------------------------------------------
 

@@ -11,9 +11,11 @@
 using HTTP: HTTP
 using JSON3: JSON3
 using Logging: global_logger
+using Random: Xoshiro, randn
 
 function mcpsession()
-    df = DataFrame(time = 1:80, x = Float64.(1:80), k = repeat(["a", "b"], 40))
+    df = DataFrame(time = 1:80, x = Float64.(1:80), k = repeat(["a", "b"], 40),
+        y = cumsum(randn(Xoshiro(11), 80)))
     return Loki.Session(; tables = (df = df,),
         contexts = (analysis = Context(0, 81), train = Context(0, 41)))
 end
@@ -116,7 +118,8 @@ end
             names = sort([String(t.name) for t in r.result.tools])
             @test names == sort(["list_node_kinds", "get_graph", "get_web_url", "add_node",
                 "update_node", "remove_node", "connect", "disconnect",
-                "set_context", "load_table"])
+                "set_context", "load_table", "run", "get_result_summary",
+                "get_diagnostic", "fit_insample"])
             for t in r.result.tools
                 @test !isempty(String(t.description))
                 @test t.inputSchema.type == "object"
@@ -259,6 +262,125 @@ end
             @test length(called(c, "get_graph").edges) == 1
             # The session is still answering after all of that.
             @test called(c, "get_graph").nextid isa Integer
+        end
+    end
+
+    @testset "running and reading back" begin
+        withmcp() do c
+            n1, n2, _ = buildchain(c)
+            report = called(c, "run", Dict("targets" => [n2]))
+            t = only(report.targets)
+            @test String(t.id) == n2 && String(t.port) == "out"
+            @test String(t.status) == "ok" && t.rows == 80
+            @test "x_ema_5" in String.(t.columns)
+            @test t.acausal == false
+            @test isempty(report.errors) && report.cancelled == false
+
+            smry = called(c, "get_result_summary", Dict("id" => n2))
+            @test smry.summary.rows == 80
+            cols = Dict(String(col.name) => col for col in smry.summary.columns)
+            @test cols["x_ema_5"].n == 80
+            @test length(smry.data.head) == 5 && length(smry.data.tail) == 5
+            narrow = called(c, "get_result_summary",
+                Dict("id" => n2, "columns" => "time,x", "head" => 2, "tail" => 0))
+            @test String.(narrow.data.columns) == ["time", "x"]
+            @test length(narrow.data.head) == 2 && isempty(narrow.data.tail)
+
+            a = called(
+                c,
+                "get_diagnostic",
+                Dict("id" => n2, "kind" => "acf",
+                    "params" => Dict("column" => "x_ema_5", "lags" => 10)),
+            )
+            @test String(a.kind) == "acf" && a.summary.lags == 10
+            # The values and the significant lags are in the summary already, so
+            # the plot-ready arrays are not sent unless they are asked for.
+            @test length(a.summary.values) == 11
+            @test !haskey(a, :data)
+            full = called(
+                c,
+                "get_diagnostic",
+                Dict("id" => n2, "kind" => "acf",
+                    "params" => Dict("column" => "x_ema_5", "lags" => 10),
+                    "include_data" => true),
+            )
+            @test length(full.data.values) == 11
+
+            # A node that has not been evaluated says to run it, rather than
+            # looking like a node that is not there.
+            payload, failed = call(c, "get_result_summary", Dict("id" => n1))
+            @test failed && occursin("run it first", String(payload.error))
+            payload, failed = call(c, "get_result_summary",
+                Dict("id" => n2, "port" => "nope"))
+            @test failed && occursin("nope", String(payload.error))
+            payload, failed = call(c, "get_diagnostic",
+                Dict("id" => n2, "kind" => "acf", "params" => Dict("column" => "no")))
+            @test failed && occursin("no", String(payload.error))
+
+            # And the same frame, for a client that would rather read a resource.
+            r = request(c, "resources/read",
+                Dict("uri" => "loki://node/$n2/result"))
+            @test JSON3.read(r.result.contents[1].text).summary.rows == 80
+        end
+    end
+
+    @testset "a failing run says which node failed" begin
+        withmcp() do c
+            n1 = String(
+                called(c, "add_node",
+                    Dict("kind" => "table", "params" => Dict("table" => "df"))).id,
+            )
+            # A column that is not there: the error lands on the node that asked
+            # for it, and the target it blocked names it too.
+            n2 = String(
+                called(c, "add_node",
+                    Dict("kind" => "ema",
+                        "params" => Dict("column" => "nope", "span" => 5))).id,
+            )
+            called(c, "connect", Dict("from" => [n1, "out"], "to" => [n2, "in"]))
+            report = called(c, "run", Dict("targets" => [n2]))
+            @test String(only(report.targets).status) == "error"
+            @test haskey(report.errors, Symbol(n2))
+            @test occursin("nope", String(report.errors[Symbol(n2)]))
+        end
+    end
+
+    @testset "fit_insample proposes and checks in one step" begin
+        withmcp() do c
+            n1 = String(
+                called(c, "add_node",
+                    Dict("kind" => "table", "params" => Dict("table" => "df"))).id,
+            )
+            r = called(c, "fit_insample",
+                Dict("from" => [n1, "out"],
+                    "params" => Dict("family" => "arma", "column" => "y",
+                        "order" => [1, 0, 1])))
+            @test String(only(r.targets).status) == "ok"
+            @test String(only(r.targets).port) == "insample"
+            @test String(r.residuals.kind) == "residuals"
+            # `applyarma` drops the model column, so the degrees of freedom can
+            # only come from the fit node's own order — which this tool knows.
+            @test r.residuals.summary.dof == 2
+            @test !isempty(r.residuals.summary.ljungbox)
+            @test haskey(r.residuals.panels, :acf)
+            @test !haskey(r.residuals.panels.acf, :data)
+
+            # The node is in the graph and already wired, under the id reported.
+            g = called(c, "get_graph")
+            @test String(r.id) in [String(n.id) for n in g.nodes]
+            @test any(e -> [String(x) for x in e.to] == [String(r.id), "in"], g.edges)
+
+            # A fit that cannot even be built leaves nothing behind.
+            before = length(called(c, "get_graph").nodes)
+            payload, failed = call(c, "fit_insample",
+                Dict("from" => [n1, "out"], "params" => Dict("family" => "arma")))
+            @test failed
+            payload, failed = call(c, "fit_insample",
+                Dict("from" => [n1, "in"],
+                    "params" => Dict("family" => "arma", "column" => "y",
+                        "order" => [1, 0, 1])))
+            @test failed
+            @test length(called(c, "get_graph").nodes) == before
         end
     end
 

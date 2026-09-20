@@ -922,10 +922,10 @@ and the loop is blocked in `readline`.
 | `add_node`, `update_node`, `remove_node` | edit nodes; `params` is an open object, because one tool cannot carry forty-nine schemas — the kind's `paramschema` comes from `list_node_kinds`, so the user and an agent still edit one vocabulary. `update_node` merges, and a `null` removes, exactly as `PATCH` does |
 | `connect`, `disconnect` | edit edges |
 | `set_context`, `load_table` | session state; `load_table` reads a CSV or parquet path through the same DuckDB reader an upload goes through |
-| `run` | evaluate nodes, with progress through `send_progress` fed by the engine's stream loop |
-| `get_result_summary` | schema, row count, per-column summary statistics, head and tail |
-| `get_diagnostic` | a diagnostic's numeric summary: ACF/PACF values and significant lags, test statistics and p-values |
-| `fit_insample` | add a fit node on a port and return its residual summary — Ljung–Box p-values, significant residual ACF lags, information criteria |
+| `run` | evaluate nodes and wait for them, with progress through `send_progress` fed by the engine's stream loop, throttled to the interval the event stream uses. Reports every node that errored, not only the targets: a target downstream of a failure is `blocked` and the error is upstream |
+| `get_result_summary` | `resultsummary`: schema, row count, per-column summary statistics, head and tail |
+| `get_diagnostic` | a diagnostic's numeric summary: ACF/PACF values and significant lags, test statistics and p-values. The plot-ready `data` is dropped unless `include_data` asks for it — the correlograms and the tests already carry their numbers in the summary, and the fan is the one that does not |
+| `fit_insample` | add a fit node on a port and return its residual summary — Ljung–Box p-values, significant residual ACF lags, information criteria. A fit that cannot be wired is taken back out; one that runs and fails stays, because it is the proposal being judged |
 | `export_julia` | the script |
 | `save`, `open` | persistence |
 | `get_web_url` | the local URL and, when `public_url` is set, the tailnet URL for a phone, to hand to the user |
