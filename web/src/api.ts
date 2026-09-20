@@ -1,4 +1,4 @@
-import type { Diagnostic, Graph, NodeKind, TableSpec } from './types'
+import type { Diagnostic, FileListing, Graph, NodeKind, TableSpec } from './types'
 
 // The REST client. The token arrives in the URL fragment, which a browser never
 // sends to a server and never puts in a `Referer`; we exchange it once for an
@@ -105,8 +105,19 @@ export const api = {
     ),
 
   exportScript: () => request<string>('GET', '/api/export'),
-  save: (path: string) =>
-    request<{ path: string }>('GET', `/api/session?path=${encodeURIComponent(path)}`),
+
+  /** One directory on the machine Loki runs on, for the file picker. */
+  files: (path?: string, hidden = false) =>
+    request<FileListing>(
+      'GET',
+      `/api/files?${new URLSearchParams({
+        ...(path === undefined ? {} : { path }),
+        ...(hidden ? { hidden: 'true' } : {}),
+      })}`,
+    ),
+
+  sessionPath: () => request<{ path: string | null }>('GET', '/api/session'),
+  save: (path: string) => request<{ path: string }>('PUT', '/api/session', { path }),
   open: (path: string) => request<unknown>('POST', '/api/session', { path }),
 
   uploadTable: async (name: string, file: File, format: 'csv' | 'parquet') => {

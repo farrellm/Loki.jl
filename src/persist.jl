@@ -20,6 +20,9 @@ relative path (see [`Loki.savetable`](@ref)).
 The graph's next id is saved too, so an id freed before saving is not handed out
 again after opening. What a node holds is JSON-like already — source text, never
 an evaluated value — so the file travels as far as the exported script does.
+
+The session remembers the file afterwards as `s.file`, so a second save
+overwrites it without being told where again.
 """
 function savesession(path::AbstractString, s::Session)
     lock(s.lock) do
@@ -30,6 +33,7 @@ function savesession(path::AbstractString, s::Session)
             nextid = s.graph.nextid, nodes = nodesjson(s.graph),
             edges = edgesjson(s.graph), tables = entries)
         open(io -> JSON3.pretty(io, JSON3.write(doc)), path, "w")
+        s.file = abspath(path)
     end
     return String(path)
 end
@@ -42,6 +46,8 @@ added and edges connected through the session's own commands, so every parameter
 is checked as it would be on an edit, and a node the file cannot rebuild is a
 [`Loki.NodeError`](@ref) naming it. A file that is not a Loki session, or one
 written by a newer Loki, says so.
+
+The session it returns remembers `path` as `s.file`.
 
 [`Loki.opensession!`](@ref) reads one into a session that is already running.
 """
@@ -57,8 +63,8 @@ on pointing at the same session.
 
 The file is read into a throwaway session first, so one the running Loki cannot
 rebuild — an unknown node kind, a parameter that no longer validates — leaves
-`s` exactly as it was rather than half replaced. The whole swap is one
-`graph_changed` event.
+`s` exactly as it was rather than half replaced, `s.file` included. The whole
+swap is one `graph_changed` event.
 """
 function opensession!(s::Session, path::AbstractString)
     fresh = readinto!(Session(; cachebytes = s.cache.budget), path)
@@ -75,8 +81,9 @@ end
     Loki.reset!(s::Session) -> Session
 
 Empty a session: cancel the run in flight, and drop its graph, contexts, tables,
-prelude, cached results and statuses. The session object survives, which is what
-lets [`Loki.opensession!`](@ref) replace what a server is serving.
+prelude, cached results and statuses, and forget the file it came from. The
+session object survives, which is what lets [`Loki.opensession!`](@ref) replace
+what a server is serving.
 
 Broadcast as one `graph_changed`, so a browser watching the session sees it go.
 """
@@ -106,6 +113,7 @@ function emptysession!(s::Session)
         empty!(s.errors)
         cachedrop!(s.cache, _ -> true)
         setprelude!(s.usercode, "")
+        s.file = nothing
     end
     return s
 end
@@ -121,6 +129,7 @@ function adopt!(s::Session, fresh::Session)
     append!(s.graph.order, fresh.graph.order)
     append!(s.graph.edges, fresh.graph.edges)
     s.graph.nextid = fresh.graph.nextid
+    s.file = fresh.file
     return s
 end
 
@@ -155,6 +164,7 @@ function readinto!(s::Session, path::AbstractString)
                 (String(edge.to[1]), Symbol(edge.to[2])); id = String(edge.id))
         end
         s.graph.nextid = max(Int(get(doc, :nextid, 0)), s.graph.nextid)
+        s.file = abspath(path)
     finally
         s.quiet = was
     end

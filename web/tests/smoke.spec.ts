@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 // Build a graph, run it, read a diagnostic, export. The iPhone project runs the
 // same specs with touch only — Playwright's device profile has no mouse — so a
@@ -33,6 +36,19 @@ async function open(page: Page) {
 }
 
 const narrow = (page: Page) => page.viewportSize()!.width < 900
+
+const focusIsInPicker = (page: Page) =>
+  page.evaluate(() =>
+    document
+      .querySelector('[data-testid="file-picker"]')!
+      .contains(document.activeElement),
+  )
+
+/** Tap or click, whichever this project has. */
+async function tap(page: Page, target: ReturnType<Page['getByTestId']>) {
+  if (narrow(page)) await target.tap()
+  else await target.click()
+}
 
 /** Open a panel, wherever it lives at this width. */
 async function panel(page: Page, id: 'diagnostics' | 'table' | 'inspector') {
@@ -291,4 +307,59 @@ test('learns about a change it did not make itself', async ({ page, context }) =
     await fetch(`/api/nodes/${nid}`, { method: 'DELETE', credentials: 'same-origin' })
   }, id)
   await expect(page.locator('.node')).toHaveCount(before)
+})
+
+test('saves the analysis to a path on the server and opens it again', async ({ page }) => {
+  await open(page)
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'loki-e2e-'))
+  fs.mkdirSync(path.join(scratch, 'nested'))
+  const extra = await addNode(page, 'ema')
+
+  // Save somewhere new. That is the file name in the bar, not `Save`, which
+  // overwrites — and the two projects share one server, so this spec cannot
+  // assume the session has never been saved. The path line is at once the
+  // breadcrumb and the file name, so the whole path goes in by typing it,
+  // which is also how a path pasted from a terminal gets in.
+  await tap(page, page.getByTestId('session-file'))
+  await expect(page.getByTestId('file-picker')).toBeVisible()
+  await tap(page, page.getByLabel('Type a path'))
+  const typed = page.getByTestId('file-path')
+  await typed.fill(path.join(scratch, 'e2e.loki.json'))
+  await typed.press('Enter')
+  await expect(page.getByTestId('file-name')).toHaveValue('e2e.loki.json')
+  await tap(page, page.getByTestId('file-confirm'))
+
+  // The bar says what you are looking at, and the file is really there.
+  await expect(page.getByTestId('file-picker')).toBeHidden()
+  await expect(page.getByTestId('session-file')).toHaveText('e2e.loki.json')
+  expect(fs.existsSync(path.join(scratch, 'e2e.loki.json'))).toBe(true)
+
+  // Throw the node away, then open the file back over the top of the session.
+  await page.evaluate(async (id) => {
+    await fetch(`/api/nodes/${id}`, { method: 'DELETE', credentials: 'same-origin' })
+  }, extra)
+  await expect(page.locator('.node')).toHaveCount(1)
+
+  await tap(page, page.getByTestId('open'))
+  // It starts in the folder the session was saved to, so the file is one tap
+  // away rather than a path away.
+  await expect(page.getByTestId('file-picker')).toContainText(scratch)
+  // Walking into a folder destroys the button that was tapped, and focus falls
+  // to the body — from where Tab walks the page behind the scrim. It has to
+  // land back inside the band.
+  await tap(page, page.getByTestId('file-nested'))
+  await expect(page.getByTestId('file-picker')).toContainText('nested')
+  expect(await focusIsInPicker(page)).toBe(true)
+  await tap(page, page.getByTestId('file-up'))
+  expect(await focusIsInPicker(page)).toBe(true)
+
+  // A file is chosen and then confirmed: one tap must not replace the analysis.
+  await tap(page, page.getByTestId('file-e2e.loki.json'))
+  await expect(page.locator('.node')).toHaveCount(1)
+  await tap(page, page.getByTestId('file-confirm'))
+
+  await expect(page.locator('.node')).toHaveCount(2)
+  await expect(page.getByTestId('session-file')).toHaveText('e2e.loki.json')
+  // The directory stays: the session now points at this file, and the next
+  // project to run against the same server opens its picker beside it.
 })

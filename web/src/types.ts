@@ -68,7 +68,27 @@ export interface Graph {
   nextid: number
   seq: number
   context: string
+  /** The file this session was saved to or opened from, if it has one. */
+  file: string | null
   running: { targets: [string, string][]; cancelled: boolean } | null
+}
+
+/** One row of `GET /api/files`. A directory has no modified time to show. */
+export interface FileEntry {
+  name: string
+  dir: boolean
+  modified?: string
+}
+
+export interface FileListing {
+  path: string
+  /** `null` at the root of the filesystem, where there is nowhere to climb. */
+  parent: string | null
+  home: string
+  working: string
+  /** True when the folder held more than the server was willing to send. */
+  truncated: boolean
+  entries: FileEntry[]
 }
 
 export interface ParamSchema {

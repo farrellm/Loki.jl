@@ -299,4 +299,29 @@ end
         @test live.cache.bytes == 0
         @test live.graph.nextid == 0
     end
+
+    # What `Save` overwrites without asking, and what the session bar shows.
+    @testset "a session remembers the file it came from" begin
+        @test Loki.Session().file === nothing
+
+        saved = Loki.Session(; contexts = (analysis = Context(0, 5),))
+        Loki.addnode!(saved, "emptyframe", Dict())
+        relative = joinpath(dir, ".", "remembered.loki.json")
+        Loki.savesession(relative, saved)
+        @test saved.file == abspath(relative)
+
+        @test Loki.opensession(path).file == abspath(path)
+
+        live = Loki.Session()
+        Loki.opensession!(live, path)
+        @test live.file == abspath(path)
+        # A file this Loki cannot rebuild leaves the remembered one alone, as it
+        # leaves the graph alone.
+        broken = joinpath(dir, "broken.loki.json")
+        @test_throws Loki.NodeError Loki.opensession!(live, broken)
+        @test live.file == abspath(path)
+
+        Loki.reset!(live)
+        @test live.file === nothing
+    end
 end

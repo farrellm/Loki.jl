@@ -34,6 +34,9 @@ mutable struct Session
     # Set while a batch of edits replays into the session — opening a file — so a
     # hundred `addnode!`s are one `graph_changed` rather than a hundred.
     quiet::Bool
+    # The file this session was last saved to or opened from, so a browser can
+    # show what it is looking at and `Save` can overwrite without asking again.
+    file::Union{Nothing,String}
     # The web server, once there is one. Untyped for the same reason
     # `Compilation.cache` is: it is defined later than this.
     server::Any
@@ -46,7 +49,7 @@ function Session(; tables = (;), contexts = (;), prelude::AbstractString = "",
         Dict{String,Any}(String(k) => v for (k, v) in pairs(tables)),
         UserCode(; prelude), ResultCache(cachebytes), Dict{String,Symbol}(),
         Dict{String,Exception}(), nothing, ReentrantLock(), Subscriber[], 0, false,
-        nothing)
+        nothing, nothing)
 end
 
 # --- events ---------------------------------------------------------------------

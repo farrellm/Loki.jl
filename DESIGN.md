@@ -713,7 +713,17 @@ A single-page app written in TypeScript with Vite and React:
   server's plot-ready data.
 - **Table** — a paged preview of a node's output.
 - **Session bar** — named contexts, tables, prelude, run and cancel, export,
-  and the origin of the most recent change (you or the agent).
+  open and save, the file the session is looking at, and the origin of the most
+  recent change (you or the agent). The file's name is itself the button that
+  saves somewhere else, and `Save` overwrites the file the session knows.
+- **File picker** — a path on the machine Loki is running on, over
+  `/api/files`. A band hanging off the session bar rather than a floating
+  dialog, with the path as its subject: one line that is at once the
+  breadcrumb, the file name field and the string that will be written. Files it
+  cannot use are dimmed rather than filtered away, because a folder filtered
+  down to nothing cannot say whether it is the right folder. It takes suffixes,
+  a folder and a name and returns a path, so a `readcsv` node's path parameter
+  can use the same component.
 
 The bundle is built into `assets/web`, which is **not** in version control:
 `web/` holds the sources, and `cd web && npm ci && npm run build` produces it. A
@@ -825,7 +835,19 @@ or the cookie.
 | `GET` | `/api/diagnostics/:id/:port/:kind` | a `DiagnosticResult` |
 | `POST` | `/api/nodes/:id/freeze` | freeze output as a table |
 | `GET` | `/api/export` | the Julia script |
-| `GET` / `POST` | `/api/session` | save, open |
+| `GET` | `/api/files` | one directory on the server, for the file picker |
+| `GET` / `PUT` / `POST` | `/api/session` | the current file, save, open |
+
+`/api/files` lists one directory — its subdirectories and files, with each
+file's modified time — so the browser can pick a path to save to or open, and
+later a path for `readcsv`. It is deliberately **not rooted**: an analysis reads
+its data from one directory and saves beside it in another, and a session that
+evaluates source text can already reach the whole filesystem (see "User code"),
+so a root would be a configuration burden rather than a boundary. The token,
+cookie, `Origin` and `Host` checks in front of it are the same ones in front of
+everything else under `/api`. A listing is capped and says when it was cut
+short, because a home directory full of downloads is otherwise a megabyte of
+JSON on a phone's connection.
 
 Every mutating endpoint calls the command layer, which takes the session lock,
 applies the change, invalidates what it affects, and broadcasts an event on
@@ -991,6 +1013,9 @@ That directory is Loki's, so saving again sweeps the snapshots nothing reference
 any more (a table dropped or renamed, or a frame that now needs JLS where it
 needed parquet), leaving anything else in it alone; a script's directory is the
 caller's and is never swept.
+A session remembers the file it was last saved to or opened from, as
+`Session.file`, so a second save overwrites it without being told where again
+and a browser can show what it is looking at; `reset!` forgets it.
 Parameters hold source text, never evaluated values, so a session file is as
 portable as the exported script. The graph's next id is saved with it, so an id
 freed before saving is not handed out again after opening; opening adds every
