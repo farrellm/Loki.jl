@@ -37,6 +37,13 @@ async function open(page: Page) {
 
 const narrow = (page: Page) => page.viewportSize()!.width < 900
 
+const focusIsInPicker = (page: Page) =>
+  page.evaluate(() =>
+    document
+      .querySelector('[data-testid="file-picker"]')!
+      .contains(document.activeElement),
+  )
+
 /** Tap or click, whichever this project has. */
 async function tap(page: Page, target: ReturnType<Page['getByTestId']>) {
   if (narrow(page)) await target.tap()
@@ -305,6 +312,7 @@ test('learns about a change it did not make itself', async ({ page, context }) =
 test('saves the analysis to a path on the server and opens it again', async ({ page }) => {
   await open(page)
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'loki-e2e-'))
+  fs.mkdirSync(path.join(scratch, 'nested'))
   const extra = await addNode(page, 'ema')
 
   // Save somewhere new. That is the file name in the bar, not `Save`, which
@@ -336,6 +344,15 @@ test('saves the analysis to a path on the server and opens it again', async ({ p
   // It starts in the folder the session was saved to, so the file is one tap
   // away rather than a path away.
   await expect(page.getByTestId('file-picker')).toContainText(scratch)
+  // Walking into a folder destroys the button that was tapped, and focus falls
+  // to the body — from where Tab walks the page behind the scrim. It has to
+  // land back inside the band.
+  await tap(page, page.getByTestId('file-nested'))
+  await expect(page.getByTestId('file-picker')).toContainText('nested')
+  expect(await focusIsInPicker(page)).toBe(true)
+  await tap(page, page.getByTestId('file-up'))
+  expect(await focusIsInPicker(page)).toBe(true)
+
   // A file is chosen and then confirmed: one tap must not replace the analysis.
   await tap(page, page.getByTestId('file-e2e.loki.json'))
   await expect(page.locator('.node')).toHaveCount(1)

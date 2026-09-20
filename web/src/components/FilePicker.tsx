@@ -90,6 +90,15 @@ export function FilePicker({
     if (typed !== null) typedField.current?.select()
   }, [typed])
 
+  // Entering a directory destroys the button that was tapped, and focus falls
+  // to the body — from where Tab walks the page behind the scrim rather than
+  // this band. Catch it once the new list is on screen, not when it arrives:
+  // the old button is still mounted until React commits. A tap that never
+  // focused anything in the first place lands here too.
+  useEffect(() => {
+    if (!band.current?.contains(document.activeElement)) band.current?.focus()
+  }, [listing])
+
   const here = listing?.path ?? dir ?? ''
   const chosen = name.trim() === '' ? '' : joinPath(here, name.trim())
   // Only a save has anything to warn about: in open mode a file that is there
@@ -141,6 +150,7 @@ export function FilePicker({
         aria-label={title}
         data-testid="file-picker"
         ref={band}
+        tabIndex={-1}
         onKeyDown={onKeyDown}
       >
         <div className="picker__head">
