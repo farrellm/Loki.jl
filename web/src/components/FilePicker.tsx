@@ -89,18 +89,24 @@ export function FilePicker({
 
   const here = listing?.path ?? dir ?? ''
   const chosen = name.trim() === '' ? '' : joinPath(here, name.trim())
-  const existing = listing?.entries.find((e) => !e.dir && e.name === name.trim())
+  // Only a save has anything to warn about: in open mode a file that is there
+  // is the whole point.
+  const overwriting =
+    mode === 'save'
+      ? listing?.entries.find((e) => !e.dir && e.name === name.trim())
+      : undefined
 
   const go = useCallback((next: string) => {
     setDir(next)
     setTyped(null)
   }, [])
 
-  // Enter on a directory goes into it; on a file it is the choice itself.
+  // A directory is entered; a file is only *chosen*, and the button below
+  // confirms it. Opening replaces the whole analysis, so one stray tap in a
+  // list should not be able to throw away what is on the canvas.
   const pick = (entry: FileEntry) => {
     if (entry.dir) return go(joinPath(here, entry.name))
-    if (mode === 'save') return setName(entry.name)
-    onChoose(joinPath(here, entry.name))
+    setName(entry.name)
   }
 
   const submit = () => {
@@ -153,7 +159,7 @@ export function FilePicker({
                 {i === 0 ? crumb.name : crumb.name + '/'}
               </button>
             ))}
-            {mode === 'save' && (
+            {mode === 'save' ? (
               <input
                 ref={nameField}
                 className="picker__name mono"
@@ -165,6 +171,12 @@ export function FilePicker({
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && submit()}
               />
+            ) : (
+              name !== '' && (
+                <span className="picker__name" data-testid="file-name">
+                  {name}
+                </span>
+              )
             )}
             <button
               type="button"
@@ -231,7 +243,9 @@ export function FilePicker({
               <li key={entry.name}>
                 <button
                   type="button"
-                  className="picker__entry mono"
+                  className={`picker__entry mono${
+                    !entry.dir && entry.name === name.trim() ? ' picker__entry--on' : ''
+                  }`}
                   data-testid={`file-${entry.name}`}
                   onClick={() => pick(entry)}
                 >
@@ -252,7 +266,7 @@ export function FilePicker({
           <span className="picker__note">
             {listing?.truncated === true &&
               'This folder holds more than Loki will list. Type a path to go straight there.'}
-            {existing !== undefined && `${existing.name} already exists.`}
+            {overwriting !== undefined && `${overwriting.name} already exists.`}
           </span>
           <button
             type="button"
@@ -261,7 +275,7 @@ export function FilePicker({
             data-testid="file-confirm"
             onClick={submit}
           >
-            {existing !== undefined && mode === 'save' ? 'Replace' : confirm}
+            {overwriting !== undefined ? 'Replace' : confirm}
           </button>
         </div>
       </div>

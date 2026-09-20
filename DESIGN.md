@@ -713,7 +713,17 @@ A single-page app written in TypeScript with Vite and React:
   server's plot-ready data.
 - **Table** — a paged preview of a node's output.
 - **Session bar** — named contexts, tables, prelude, run and cancel, export,
-  and the origin of the most recent change (you or the agent).
+  open and save, the file the session is looking at, and the origin of the most
+  recent change (you or the agent). The file's name is itself the button that
+  saves somewhere else, and `Save` overwrites the file the session knows.
+- **File picker** — a path on the machine Loki is running on, over
+  `/api/files`. A band hanging off the session bar rather than a floating
+  dialog, with the path as its subject: one line that is at once the
+  breadcrumb, the file name field and the string that will be written. Files it
+  cannot use are dimmed rather than filtered away, because a folder filtered
+  down to nothing cannot say whether it is the right folder. It takes suffixes,
+  a folder and a name and returns a path, so a `readcsv` node's path parameter
+  can use the same component.
 
 The bundle is built into `assets/web`, which is **not** in version control:
 `web/` holds the sources, and `cd web && npm ci && npm run build` produces it. A

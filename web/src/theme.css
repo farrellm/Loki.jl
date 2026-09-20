@@ -149,6 +149,15 @@ button:disabled {
   cursor: default;
 }
 
+/* A primary button that cannot be pressed must not still look like the thing
+   to press. */
+button.primary:disabled {
+  border-color: var(--rule);
+  background: var(--panel);
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
 button.primary {
   border-color: var(--signal);
   background: var(--signal);
