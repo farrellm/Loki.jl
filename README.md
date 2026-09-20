@@ -12,8 +12,8 @@ can be driven from a browser or by an agent over MCP.
 
 Loki is under construction; [DESIGN.md](DESIGN.md) describes the design and its
 milestones. The time-series operators, in-sample fits, the graph, the engine,
-the diagnostics and the browser app are in place; driving the same session from
-an agent over MCP is next.
+the diagnostics, the browser app and MCP mode are in place; breadth — seasonal
+models in the UI, more diagnostics, undo and redo — is next.
 
 ## Operators
 
@@ -94,6 +94,29 @@ cd web && npm ci && npm run build
 ```
 
 A server without one still runs; it serves a page saying how to build it.
+
+## With an agent
+
+`Loki.serve_mcp` does everything `Loki.serve` does and also speaks MCP over
+stdio, against the same session. There is one graph, one cache and one lock, so
+an agent's edits appear live in the browser and the user's edits are what the
+agent reads next. A Claude Code configuration is one line:
+
+```json
+{ "mcpServers": { "loki": { "command": "julia", "args": ["-e", "using Loki; Loki.serve_mcp()"] } } }
+```
+
+The tools are the command layer: `list_node_kinds` publishes each kind's
+parameter schema — the same one the browser's inspector renders as a form —
+then `add_node`, `connect` and `run` build and evaluate, `get_result_summary`
+and `get_diagnostic` read the outcome, and `fit_insample` adds a fit and reports
+its residual tests in one call. `get_web_url` gives the agent the URL to hand
+the user. Stdout belongs to the JSON-RPC stream, so everything Loki says goes to
+stderr.
+
+Every result an agent receives is a summary — a schema, a statistic per column,
+a test's p-values. The rows themselves stay in the browser, where the user can
+see them.
 
 ## Export and save
 

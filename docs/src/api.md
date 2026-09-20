@@ -121,7 +121,9 @@ Loki.currentorigin
 
 ```@docs
 serve
+serve_mcp
 Loki.Server
+Loki.MCPMode
 Loki.stop!
 Loki.server
 Loki.port

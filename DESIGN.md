@@ -1067,7 +1067,7 @@ kind does not accept fails on that node rather than silently.
 Exports: `Lags`, `EMA`, `FitARMA`, `FittedARMA`, `ARMAFilter`, `lags`,
 `difference`, `logtransform`, `boxcox`, `ema`, `macd`, `ar`, `fitarma`,
 `applyarma`, `arma`, `fitonce`, `acf`, `pacf`, `ljungbox`, `adftest`,
-`fitreport`, `forecastfan`, `serve`, `serve_mcp` (Milestone 4), `exportjulia`.
+`fitreport`, `forecastfan`, `serve`, `serve_mcp`, `exportjulia`.
 `Loki.Acausal` and its `insample` are not in this list, for CausalFrames'
 reason: acausality is an explicit opt-in.
 
@@ -1155,14 +1155,16 @@ design.
    diagnostics and table, on a laptop and on a phone. The Julia suite covers the
    access-control list bullet by bullet; two Playwright projects, desktop and an
    iPhone profile that may only tap, drive the app against a live server.
-4. MCP mode.
+4. MCP mode. *Done:* `serve_mcp`, the seventeen tools and the two resources
+   above over ModelContextProtocol.jl's stdio transport against the same
+   session the browser has, `Loki.resultsummary` behind `get_result_summary`,
+   and tests that drive the server over a pipe in-process — including the one
+   that matters: an agent's edit arrives on the browser's WebSocket carrying
+   `origin = "mcp"`.
 5. Breadth: seasonal models in the UI, more diagnostics, undo and redo.
 
 ## Open questions
 
-- **ModelContextProtocol.jl alongside HTTP.jl.** Whether `start!` blocks, and on
-  which thread its handlers run next to `HTTP.serve!`, is to be confirmed at
-  implementation; the command-layer lock is the design's answer either way.
 - **Upstreaming.** Whether `Lags`, `EMA`, `difference` and a `CausalPipeline`
   run accessor belong in CausalFrames.
 - **Undo and redo** across two clients: a single linear history, or one per

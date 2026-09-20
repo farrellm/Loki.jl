@@ -7,9 +7,9 @@ of the graph as a plain Julia script.
 **DESIGN.md is the source of truth for the design and must be kept in sync
 with any API or semantics change.** Its "Milestones" section is the roadmap;
 Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine), 2
-(`emit`, `exportjulia`, table snapshots, `.loki.json`) and 3 (diagnostics,
-events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
-(MCP mode) is next.
+(`emit`, `exportjulia`, table snapshots, `.loki.json`), 3 (diagnostics, events,
+the HTTP server and WebSocket, and the web app) and 4 (MCP mode) are done;
+Milestone 5 (breadth) is next.
 
 ## Layout
 
@@ -24,7 +24,8 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
   substitution, `NodeError`), `engine.jl` (result cache, runs on a worker
   task), `session.jl` (the session and its lock), `usercode.jl`
 - `src/events.jl`: session events, broadcast under the lock with a monotonic
-  `seq`; `src/server.jl`: static bundle, REST API, WebSocket, access control
+  `seq`; `src/server.jl`: static bundle, REST API, WebSocket, access control;
+  `src/mcp.jl`: the MCP tools and resources, and `serve_mcp`
 - `src/export.jl` (`exportjulia` and its printer), `persist.jl` (`.loki.json`),
   `tables.jl` (table snapshots)
 - `web/src/`: React app: `api.ts` REST client, `ws.ts` event socket,
