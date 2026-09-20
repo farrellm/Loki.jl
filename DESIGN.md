@@ -624,6 +624,7 @@ user points at first.
 | Diagnostic | Function | Notes |
 |---|---|---|
 | Series and table preview | `seriesplot`, `preview` | long series are downsampled server-side (LTTB) before plotting |
+| Whole-frame summary | `resultsummary(frame; head, tail)` | schema, row count, a statistic per column, and the first and last rows — what an agent reads instead of the rows |
 | ACF / PACF | `acf(frame, col; lags)`, `pacf(frame, col; lags)` | StatsBase `autocor`/`pacf`, with ±1.96/√n bands; the summary lists the significant lags |
 | Distribution | `histogram`, `qqplot` | against a fitted normal |
 | Stationarity | `adftest(frame, col)` | HypothesisTests `ADFTest` |

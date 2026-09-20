@@ -65,6 +65,7 @@ Loki.nodekinds
 Loki.DiagnosticResult
 Loki.seriesplot
 Loki.preview
+Loki.resultsummary
 Loki.columnvectors
 Loki.keyvalues
 Loki.lttb

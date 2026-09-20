@@ -167,6 +167,47 @@ end
         @test_throws ArgumentError Loki.preview(whole; columns = [:nope])
     end
 
+    @testset "resultsummary" begin
+        r = Loki.resultsummary(whole)
+        @test r.kind === :summary
+        @test r.summary["rows"] == 100
+        @test r.summary["matched"] == 100
+        by = Dict(c["name"] => c for c in r.summary["columns"])
+        @test by["x"]["n"] == 98 && by["x"]["missing"] == 2
+        @test by["x"]["mean"] ≈ Statistics.mean(skipmissing(df.x))
+        @test by["x"]["std"] ≈ Statistics.std(skipmissing(df.x))
+        @test by["x"]["min"] ≈ minimum(skipmissing(df.x))
+        @test by["x"]["max"] ≈ maximum(skipmissing(df.x))
+        # `first` and `last` are the first and last values there were, not the
+        # first and last rows: `x` is missing in neither place here.
+        @test by["x"]["first"] ≈ df.x[1] && by["x"]["last"] ≈ df.x[100]
+        @test by["time"]["min"] == 1 && by["time"]["max"] == 100
+        # A key column is worth listing; a column of 100 distinct labels is not.
+        @test by["k"]["distinct"] == 2 && by["k"]["values"] == ["a", "b"]
+        @test by["label"]["distinct"] === nothing && by["label"]["values"] === nothing
+        @test length(r.data["head"]) == 5 && length(r.data["tail"]) == 5
+        @test r.data["tailoffset"] == 95
+        @test r.data["head"][1][1] === 1 && r.data["tail"][end][1] === 100
+        # Read one backing chunk at a time, it says exactly the same thing.
+        @test samediagnostic(Loki.resultsummary(chunked), r)
+
+        keyed = Loki.resultsummary(whole; key = :k => "b", columns = [:time, :x])
+        @test keyed.summary["matched"] == 50
+        @test [c["name"] for c in keyed.summary["columns"]] == ["time", "x"]
+        @test keyed.data["head"][1][1] === 2
+
+        # A frame shorter than head + tail shows every row once, not twice.
+        short = Loki.resultsummary(whole; head = 60, tail = 60)
+        @test length(short.data["head"]) == 60 && length(short.data["tail"]) == 40
+        @test short.data["tailoffset"] == 60
+        tiny = Loki.resultsummary(whole; head = 200, tail = 5)
+        @test length(tiny.data["head"]) == 100 && isempty(tiny.data["tail"])
+
+        @test_throws ArgumentError Loki.resultsummary(whole; head = -1)
+        @test_throws ArgumentError Loki.resultsummary(whole; tail = -1)
+        @test_throws ArgumentError Loki.resultsummary(whole; columns = [:nope])
+    end
+
     # A frame of fitted models previews as text rather than failing to serialize.
     @testset "preview of an opaque column" begin
         models = load(Context(0, 41),
@@ -186,13 +227,24 @@ end
         allmissing = CausalFrame(DIAGCTX,
             DataFrame(time = 1:5, x = Vector{Union{Missing,Float64}}(missing, 5)))
         for frame in (flat, allmissing),
-            r in (Loki.seriesplot(frame, :x), Loki.preview(frame))
+            r in (Loki.seriesplot(frame, :x), Loki.preview(frame),
+                Loki.resultsummary(frame))
 
             text = JSON3.write(r)
             @test !occursin("NaN", text) && !occursin("Inf", text)
             @test JSON3.read(text).kind == String(r.kind)
         end
         @test Loki.seriesplot(allmissing, :x).summary["series"]["x"]["mean"] === nothing
+        # A constant column has no spread, and an all-missing one has nothing at
+        # all; both are `null` rather than the NaN `JSON3.write` refuses.
+        flatx = only(c for c in Loki.resultsummary(flat).summary["columns"]
+                   if c["name"] == "x")
+        @test flatx["std"] == 0.0 && flatx["min"] == 2.0
+        gonex = only(
+            c for c in Loki.resultsummary(allmissing).summary["columns"]
+            if c["name"] == "x"
+        )
+        @test gonex["n"] == 0 && gonex["mean"] === nothing && gonex["std"] === nothing
 
         # An empty frame reports only `:time` and the context's time type — it has
         # never seen a chunk, so it knows no other column.
@@ -201,6 +253,10 @@ end
         @test e.data["columns"] == ["time"]
         @test e.data["total"] == 0
         @test JSON3.read(JSON3.write(e)).data.total == 0
+        es = Loki.resultsummary(empt)
+        @test es.summary["rows"] == 0 && es.summary["matched"] == 0
+        @test isempty(es.data["head"]) && isempty(es.data["tail"])
+        @test only(es.summary["columns"])["name"] == "time"
         @test_throws ArgumentError Loki.seriesplot(empt, :x)
     end
 end
@@ -496,7 +552,7 @@ end
 
     @testset "the dispatcher" begin
         @test Loki.diagnostics() == ["acf", "adf", "fit", "forecast", "histogram",
-            "ljungbox", "pacf", "preview", "qqplot", "residuals", "series"]
+            "ljungbox", "pacf", "preview", "qqplot", "residuals", "series", "summary"]
         # Everything arrives as a string from a query string, and is coerced here.
         a = Loki.diagnostic(insample, "acf";
             params = Dict("column" => "y_residual", "lags" => "12", "level" => "0.9"))
@@ -511,6 +567,8 @@ end
         ) == 2
         @test Loki.diagnostic(insample, "preview";
             params = Dict("offset"=>"3", "limit"=>"2")).data["total"] == 240
+        @test Loki.diagnostic(insample, "summary";
+            params = Dict("head"=>"2", "tail"=>"0")).summary["matched"] == 240
         @test Loki.diagnostic(models, "fit"; params = Dict()).summary["order"] == [1, 0, 1]
         @test Loki.diagnostic(insample, "forecast";
             params = Dict("column"=>"y", "h"=>"4", "models"=>models,
