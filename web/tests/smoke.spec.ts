@@ -20,9 +20,7 @@ async function open(page: Page) {
   // rather than on top of whatever the last one built. Deleting from outside the
   // app also exercises the socket: the canvas has to hear about it.
   await page.evaluate(async () => {
-    const graph = await (
-      await fetch('/api/graph', { credentials: 'same-origin' })
-    ).json()
+    const graph = await (await fetch('/api/graph', { credentials: 'same-origin' })).json()
     for (const node of graph.nodes) {
       if (node.id !== 'n1') {
         await fetch(`/api/nodes/${node.id}`, {
@@ -213,7 +211,11 @@ test('shows a failing node where it failed, and blocks what is downstream', asyn
       params: { function: 'r -> error("boom")' },
       position: [80, 320],
     })
-    const after = await post('/api/nodes', { kind: 'head', params: { n: 3 }, position: [360, 320] })
+    const after = await post('/api/nodes', {
+      kind: 'head',
+      params: { n: 3 },
+      position: [360, 320],
+    })
     await post('/api/edges', { from: ['n1', 'out'], to: [bad.id, 'in'] })
     await post('/api/edges', { from: [bad.id, 'out'], to: [after.id, 'in'] })
     await post('/api/run', { targets: [after.id] })
@@ -249,22 +251,45 @@ test('badges an acausal fit and everything downstream of it', async ({ page }) =
     })
     const fit = await post('/api/nodes', {
       kind: 'fit',
-      params: { family: 'arma', column: 'close_log', order: [1, 0, 1], fitcontext: 'train' },
+      params: {
+        family: 'arma',
+        column: 'close_log',
+        order: [1, 0, 1],
+        fitcontext: 'train',
+      },
       position: [600, 60],
     })
-    const after = await post('/api/nodes', { kind: 'head', params: { n: 5 }, position: [900, 60] })
+    const after = await post('/api/nodes', {
+      kind: 'head',
+      params: { n: 5 },
+      position: [900, 60],
+    })
     await post('/api/edges', { from: ['n1', 'out'], to: [log.id, 'in'] })
     await post('/api/edges', { from: [log.id, 'out'], to: [fit.id, 'in'] })
     await post('/api/edges', { from: [fit.id, 'insample'], to: [after.id, 'in'] })
-    await post('/api/run', { targets: [[fit.id, 'insample'], [fit.id, 'model']] })
+    await post('/api/run', {
+      targets: [
+        [fit.id, 'insample'],
+        [fit.id, 'model'],
+      ],
+    })
     return { log: log.id, fit: fit.id, after: after.id }
   })
 
   // Taint is contagious: the fit's in-sample port is acausal, so what reads it is
   // too — and what feeds it is not.
-  await expect(page.getByTestId(`node-${ids.fit}`)).toHaveAttribute('data-acausal', 'true')
-  await expect(page.getByTestId(`node-${ids.after}`)).toHaveAttribute('data-acausal', 'true')
-  await expect(page.getByTestId(`node-${ids.log}`)).toHaveAttribute('data-acausal', 'false')
+  await expect(page.getByTestId(`node-${ids.fit}`)).toHaveAttribute(
+    'data-acausal',
+    'true',
+  )
+  await expect(page.getByTestId(`node-${ids.after}`)).toHaveAttribute(
+    'data-acausal',
+    'true',
+  )
+  await expect(page.getByTestId(`node-${ids.log}`)).toHaveAttribute(
+    'data-acausal',
+    'false',
+  )
 
   // The residual panel is what the fit was made for, and it opens on itself.
   await expect(page.getByTestId(`node-${ids.fit}`)).toHaveAttribute('data-status', 'ok')
@@ -273,7 +298,10 @@ test('badges an acausal fit and everything downstream of it', async ({ page }) =
   if (narrow(page)) await inspect.tap()
   else await inspect.click()
   await panel(page, 'diagnostics')
-  await expect(page.getByTestId('view-residuals')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('view-residuals')).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
   await expect(page.locator('.verdict')).toContainText(/white noise|autocorrelated/)
   await expect(page.locator('.residuals__cell')).toHaveCount(6)
 })
@@ -309,7 +337,9 @@ test('learns about a change it did not make itself', async ({ page, context }) =
   await expect(page.locator('.node')).toHaveCount(before)
 })
 
-test('saves the analysis to a path on the server and opens it again', async ({ page }) => {
+test('saves the analysis to a path on the server and opens it again', async ({
+  page,
+}) => {
   await open(page)
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'loki-e2e-'))
   fs.mkdirSync(path.join(scratch, 'nested'))

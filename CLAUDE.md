@@ -67,14 +67,26 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
   is gitignored — build it or the server serves a "not built" page), `npm test`
   (vitest) and `npm run test:e2e` (Playwright: desktop Chromium and WebKit on an
   iPhone profile, against a live `Loki.serve()` that `playwright.config.ts`
-  starts). The `web` CI job runs all three. WebKit needs system libraries that
-  `npx playwright install --with-deps` installs with root; without them, run the
-  desktop project only. For hot reload, run `npm run dev` next to a
-  `Loki.serve()` on its default port 8712: Vite proxies `/api` and `/ws` to it
-- The web sources have **no prettier and no eslint** — match the house style by
-  hand (no semicolons, single quotes). `npx prettier` installs an ad-hoc copy
-  and rewrites whole files to its own defaults. `npm run build` runs
-  `tsc --noEmit` first, so it is the typecheck too
+  starts). The `web` CI job runs all three, plus lint and format:check. WebKit
+  needs system libraries that `npx playwright install --with-deps` installs
+  with root; without them, run the desktop project only. For hot reload, run
+  `npm run dev` next to a `Loki.serve()` on its default port 8712: Vite proxies
+  `/api` and `/ws` to it
+- The web sources are formatted by Prettier and linted by ESLint, both from
+  `web/`: `npm run format` / `npm run format:check` (`printWidth` 90, no
+  semicolons, single quotes — `web/.prettierrc.json`) and `npm run lint`
+  (`eslint . --max-warnings=0`). A second `Stop` hook in
+  `.claude/settings.json` prettifies modified web files once per turn, as the
+  first one does `.jl` files. `npm run build` still runs `tsc --noEmit` first,
+  so it is the typecheck too
+- `web/eslint.config.js` is deliberately light, and two choices there are not
+  obvious: `@typescript-eslint/no-explicit-any` is off because every `any` in
+  the tree is the untyped server-JSON boundary, and react-hooks' two core
+  rules are listed by hand because v7's own `recommended` bundles the React
+  Compiler rules, which this app's state-syncing effects fail. The
+  type-checked `typescript-eslint` sets are not enabled either.
+  `eslint-plugin-react-refresh` is absent on purpose: `Plot.tsx` exports its
+  trace builders beside the component
 - To look at a change in a real browser: `npm run build`, then
   `LOKI_TEST_PORT=8719 LOKI_TEST_TOKEN=dev julia --project web/tests/server.jl`
   — the seeded session, on a port of its own. The server reads `assets/web`

@@ -83,7 +83,12 @@ export function SessionBar({
     <>
       <header className="bar" data-testid="session-bar">
         {running && <span className="bar__sweep" aria-hidden="true" />}
-        <button type="button" className="bar__menu quiet" onClick={onMenu} aria-label="Menu">
+        <button
+          type="button"
+          className="bar__menu quiet"
+          onClick={onMenu}
+          aria-label="Menu"
+        >
           ≡
         </button>
         <span className="bar__name">Loki</span>
@@ -140,7 +145,12 @@ export function SessionBar({
           >
             Save
           </button>
-          <button type="button" disabled={busy} onClick={exportScript} data-testid="export">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={exportScript}
+            data-testid="export"
+          >
             Export script
           </button>
         </div>

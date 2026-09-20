@@ -39,7 +39,6 @@ function rowcount(node: GraphNode): number | null {
   return shapes.length > 0 ? shapes[0].rows : null
 }
 
-
 export function NodeCard({ data }: NodeProps) {
   const { node, compact, selected } = data as NodeCardData
   const rows = rowcount(node)

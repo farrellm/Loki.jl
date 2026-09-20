@@ -44,9 +44,7 @@ export function Inspector({ store }: { store: SessionStore }) {
   if (node === null || kind === null) {
     return (
       <section className="inspector" aria-label="Inspector">
-        <p className="inspector__none">
-          Select a node to see and change what it does.
-        </p>
+        <p className="inspector__none">Select a node to see and change what it does.</p>
       </section>
     )
   }
@@ -156,8 +154,14 @@ function PortActions({
   return (
     <div className="portactions">
       {node.outputs.length > 1 && <span className="portactions__name mono">{port}</span>}
-      <button type="button" disabled={!evaluated} onClick={() => setWatched({ id: node.id, port })}>
-        {evaluated ? `Inspect ${node.results[port].rows.toLocaleString()} rows` : 'Not run yet'}
+      <button
+        type="button"
+        disabled={!evaluated}
+        onClick={() => setWatched({ id: node.id, port })}
+      >
+        {evaluated
+          ? `Inspect ${node.results[port].rows.toLocaleString()} rows`
+          : 'Not run yet'}
       </button>
       <button
         type="button"

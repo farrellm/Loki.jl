@@ -16,8 +16,16 @@ import type { Diagnostic, GraphNode, Watched } from '../types'
 // in one view, so changing an order and looking again is a glance rather than
 // six separate questions.
 
-const VIEWS = ['series', 'acf', 'pacf', 'distribution', 'stationarity', 'residuals',
-  'forecast', 'fit'] as const
+const VIEWS = [
+  'series',
+  'acf',
+  'pacf',
+  'distribution',
+  'stationarity',
+  'residuals',
+  'forecast',
+  'fit',
+] as const
 type View = (typeof VIEWS)[number]
 
 export function Diagnostics({
@@ -34,7 +42,10 @@ export function Diagnostics({
   const [busy, setBusy] = useState(false)
 
   const shape = watched && node ? node.results[watched.port] : undefined
-  const columns = (shape?.columns ?? []).filter((c) => c !== 'time')
+  const columns = useMemo(
+    () => (shape?.columns ?? []).filter((c) => c !== 'time'),
+    [shape],
+  )
 
   useEffect(() => {
     if (column === '' && columns.length > 0) setColumn(columns[0])
@@ -51,6 +62,9 @@ export function Diagnostics({
       setView('residuals')
       setColumn(residual)
     }
+    // Only when the watched port changes: a rerun that renames a column
+    // should not drag the panel back off whatever the reader opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watched?.id, watched?.port])
 
   const load = useCallback(async () => {
@@ -137,11 +151,7 @@ const LABELS: Record<View, string> = {
 }
 
 function kindOf(view: View): string {
-  return view === 'distribution'
-    ? 'histogram'
-    : view === 'stationarity'
-      ? 'adf'
-      : view
+  return view === 'distribution' ? 'histogram' : view === 'stationarity' ? 'adf' : view
 }
 
 function Panel({ result, view }: { result: Diagnostic; view: View }) {
@@ -273,7 +283,11 @@ function LjungBox({ result }: { result: Diagnostic }) {
 
 function Numbers({ summary }: { summary: Record<string, any> }) {
   const scalars = Object.entries(summary).filter(
-    ([, v]) => v === null || typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean',
+    ([, v]) =>
+      v === null ||
+      typeof v === 'number' ||
+      typeof v === 'string' ||
+      typeof v === 'boolean',
   )
   if (scalars.length === 0) return null
   return (

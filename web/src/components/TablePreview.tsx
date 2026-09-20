@@ -67,7 +67,11 @@ export function TablePreview({ watched }: { watched: Watched | null }) {
               <tr key={r}>
                 {row.map((cell, c) => (
                   <td key={c} className={typeof cell === 'number' ? 'num' : 'mono'}>
-                    {cell === null ? <span className="missing">missing</span> : String(cell)}
+                    {cell === null ? (
+                      <span className="missing">missing</span>
+                    ) : (
+                      String(cell)
+                    )}
                   </td>
                 ))}
               </tr>
