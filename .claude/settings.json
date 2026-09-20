@@ -10,6 +10,16 @@
             "statusMessage": "Formatting Julia"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || exit 0\nbin=web/node_modules/.bin/prettier\n[ -x \"$bin\" ] || exit 0\nerr=$(git ls-files -z -mo --exclude-standard -- 'web/*.ts' 'web/*.tsx' 'web/*.css' 'web/*.json' 'web/*.html' ':!:web/package-lock.json' 2>/dev/null | xargs -0 -r \"$bin\" --write --log-level warn 2>&1 >/dev/null) || true\n[ -z \"$err\" ] || { printf 'prettier: %s\\n' \"$err\" >&2; exit 1; }\nexit 0",
+            "timeout": 120,
+            "statusMessage": "Formatting web"
+          }
+        ]
       }
     ]
   }
