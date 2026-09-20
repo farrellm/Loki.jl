@@ -887,6 +887,191 @@
   display: none;
 }
 
+/* --- the file picker ------------------------------------------------------ */
+
+/* A band hanging off the session bar, not a floating card: hairline edges, no
+ * radius, and no shadow — the scrim below is what says it sits above the app,
+ * so the one shadow in the interface stays the bottom sheet's.
+ */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: var(--scrim);
+}
+
+.picker {
+  position: fixed;
+  top: 52px;
+  left: 0;
+  right: 0;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 52px);
+  padding-bottom: var(--safe-b);
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel);
+}
+
+.picker__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 8px var(--gap);
+  border-bottom: 1px solid var(--rule);
+}
+
+/* The subject of the whole panel: the string that will be written, at the only
+ * size in the app above a heading. Every ancestor in it is a button.
+ */
+.picker__path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 14px var(--gap);
+  font-size: var(--t-l);
+  line-height: 1.4;
+}
+
+.picker__crumb {
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  font: inherit;
+  font-family: var(--mono);
+  color: var(--ink-quiet);
+}
+
+.picker__crumb:hover:not(:disabled) {
+  background: none;
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.picker__name {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+/* The rest of the line: clicking the empty space after the path is how you
+ * start typing one, so it has to be a target rather than dead space.
+ */
+.picker__type {
+  flex: 1 1 3rem;
+  min-width: 3rem;
+  min-height: 1.4em;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: text;
+}
+
+.picker__type:hover:not(:disabled) {
+  background: none;
+}
+
+.picker__typed {
+  min-height: 0;
+  padding: 2px 4px;
+  font-size: var(--t-l);
+}
+
+.picker__problem {
+  margin: 0;
+  padding: 0 var(--gap) 10px;
+  font-size: var(--t-s);
+  color: var(--alarm);
+}
+
+.picker__list {
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 4px 0;
+  border-top: 1px solid var(--rule);
+  list-style: none;
+}
+
+.picker__entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  width: 100%;
+  min-height: 34px;
+  padding: 4px var(--gap);
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: var(--t-s);
+  text-align: left;
+}
+
+/* Shown, not hidden: a folder filtered down to nothing cannot tell you whether
+ * it is the folder you meant.
+ */
+.picker__entry--unusable {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+.picker__entry--up {
+  color: var(--ink-quiet);
+}
+
+.picker__when {
+  flex: none;
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.picker__empty,
+.picker__note {
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+}
+
+.picker__empty {
+  padding: 10px var(--gap);
+}
+
+.picker__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 8px var(--gap);
+  border-top: 1px solid var(--rule);
+}
+
+.app--narrow .picker {
+  top: 52px;
+  max-height: calc(100dvh - 52px);
+}
+
+.app--narrow .picker__entry {
+  min-height: var(--tap);
+}
+
+.app--narrow .picker__path {
+  font-size: var(--t-m);
+}
+
+.app--narrow .picker__typed {
+  font-size: var(--t-m);
+}
+
 /* --- notices -------------------------------------------------------------- */
 
 .notices {
