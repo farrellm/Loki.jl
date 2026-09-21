@@ -13,6 +13,7 @@ import {
 } from '@xyflow/react'
 import { NodeCard } from './NodeCard'
 import { api } from '../api'
+import { mergenodes } from '../flow'
 import type { SessionStore } from '../store'
 
 const nodeTypes = { loki: NodeCard }
@@ -52,9 +53,10 @@ function CanvasSurface({ store, compact, pendingKind, onPlaced }: CanvasProps) {
   )
 
   // The session is the source of truth for what is on the canvas, but React
-  // Flow has to be answered as well as read: see `onNodesChange`.
+  // Flow has to be answered as well as read: see `onNodesChange`. What React
+  // Flow has filled in survives a refetch: see `mergenodes`.
   const [nodes, setNodes] = useState(fromgraph)
-  useEffect(() => setNodes(fromgraph), [fromgraph])
+  useEffect(() => setNodes((current) => mergenodes(current, fromgraph)), [fromgraph])
 
   const edges: Edge[] = useMemo(
     () =>
