@@ -41,6 +41,9 @@ mutable struct Server
     hosts::Set{String}
     # The router closes over this struct, so it is set once the struct exists.
     router::Any
+    # The `Loki.MCPMode` beside it under `serve_mcp`, or nothing. Untyped, like
+    # `Session.server`, because MCP mode is defined after this.
+    mcp::Any
 end
 
 """
@@ -721,19 +724,25 @@ function mergeparams(current::AbstractDict, given::AbstractDict)
     return merged
 end
 
-# The cached frame a results or diagnostics route is about, and the node it came
-# from. A node that exists but has not been evaluated is a 409 rather than a 404:
-# the client should run it, not go looking for a different id.
-function needsresult(s::Session, req::HTTP.Request)
-    params = HTTP.getparams(req)
-    id = needsnode(s, params["id"])
-    portname = Symbol(params["port"])
-    node = lock(() -> getnode(s.graph, id), s.lock)
+# The cached frame a results or diagnostics request is about, and the node it
+# came from. A node that exists but has not been evaluated is a `NotEvaluated`
+# rather than a `NotFound` — a 409 over HTTP — because the client should run it
+# rather than go looking for a different id. The HTTP method only reads the
+# request; the work is in the other one, so the MCP tools inherit the same
+# discipline instead of writing a second one that drifts.
+needsresult(s::Session, req::HTTP.Request) =
+    needsresult(s, HTTP.getparams(req)["id"], HTTP.getparams(req)["port"],
+        contextname(req))
+
+function needsresult(s::Session, id::AbstractString, port, context::AbstractString)
+    nid = needsnode(s, id)
+    portname = Symbol(port)
+    node = lock(() -> getnode(s.graph, nid), s.lock)
     portname in outputs(nodekind(node.kind)) ||
-        throw(NotFound("node $id ($(node.kind)) has no output port $portname"))
-    frame = result(s, id; port = portname, context = contextname(req))
-    frame === nothing && throw(NotEvaluated("node $id has not been evaluated over \
-        $(repr(contextname(req))); run it first", id, portname))
+        throw(NotFound("node $nid ($(node.kind)) has no output port $portname"))
+    frame = result(s, nid; port = portname, context)
+    frame === nothing && throw(NotEvaluated("node $nid has not been evaluated over \
+        $(repr(context)); run it first", nid, portname))
     return frame, node
 end
 
@@ -1117,7 +1126,8 @@ function serve(s::Session; port::Integer = 8712,
     srv = Server(s, String(token),
         public_url === nothing ? nothing : String(public_url),
         normpath(String(assets)), Any[], Subscriber[], Threads.Event(),
-        ReentrantLock(), nothing, Int(port), Set{String}(), Set{String}(), nothing)
+        ReentrantLock(), nothing, Int(port), Set{String}(), Set{String}(), nothing,
+        nothing)
     srv.router = buildrouter(srv)
     http = HTTP.serve!("127.0.0.1", Int(port); stream = true, listenany = port == 0,
         verbose = -1) do stream
@@ -1142,8 +1152,9 @@ serve(; tables = (;), contexts = (;), prelude::AbstractString = "",
     Loki.stop!(s::Session) -> Session
     Loki.stop!(srv::Loki.Server) -> Loki.Server
 
-Stop serving: close the listener and every open WebSocket, and leave no task
-behind. A session that is not being served is left alone.
+Stop serving: close the listener and every open WebSocket, end the MCP read loop
+if [`serve_mcp`](@ref) started one, and leave no task behind. A session that is
+not being served is left alone.
 """
 function stop!(srv::Server)
     # Order matters. Closing the subscribers ends every writer task; closing the
@@ -1172,6 +1183,7 @@ function stop!(srv::Server)
     catch err
         err isa InterruptException && rethrow()
     end
+    stopmcp!(srv)
     lock(() -> (srv.session.server = nothing), srv.session.lock)
     return srv
 end

@@ -624,6 +624,7 @@ user points at first.
 | Diagnostic | Function | Notes |
 |---|---|---|
 | Series and table preview | `seriesplot`, `preview` | long series are downsampled server-side (LTTB) before plotting |
+| Whole-frame summary | `resultsummary(frame; head, tail)` | schema, row count, a statistic per column, and the first and last rows — what an agent reads instead of the rows |
 | ACF / PACF | `acf(frame, col; lags)`, `pacf(frame, col; lags)` | StatsBase `autocor`/`pacf`, with ±1.96/√n bands; the summary lists the significant lags |
 | Distribution | `histogram`, `qqplot` | against a fitted normal |
 | Stationarity | `adftest(frame, col)` | HypothesisTests `ADFTest` |
@@ -898,21 +899,35 @@ A Claude Code configuration is one line:
 The server is built with **ModelContextProtocol.jl**: `mcp_server(name = "loki", tools, resources)`
 with its default stdio transport, and `start!(server)` on its own task, after the
 web server is up. Tool handlers run on that task and reach the session only
-through the command layer, whose lock serializes them against browser requests.
+through the command layer, whose lock serializes them against browser requests,
+under `withorigin(:mcp)` — the counterpart of the `withorigin(:ui)` the HTTP
+handler sets, and what lets the browser show what the agent just did.
+
+`start!` **blocks** in its read loop until stdin closes, which is why
+`serve_mcp` blocks too: the configuration above is a process whose job is to be
+that server, and a `serve_mcp` that returned would end it. `wait = false` leaves
+the loop on its own task, for the REPL and for the tests, and `transport` takes
+a `StdioTransport` over any pair of streams, which is how the tests drive it
+over a pipe without a second Julia. `start!` also installs its own global
+logger, so that `@info` reaches the client as `notifications/message`, and never
+takes it back; `stop!` returns the one it displaced, so a session served and
+stopped inside a larger process leaves logging as it found it. Ending the loop
+means closing the transport's input: `close` on the transport only flips a flag,
+and the loop is blocked in `readline`.
 
 | Tool | Purpose |
 |---|---|
-| `list_node_kinds` | kinds, ports, and each kind's param schema |
+| `list_node_kinds` | the catalog — names, categories, ports — and, for one `kind` or one `category`, each kind's `paramschema` |
 | `get_graph` | nodes, edges, params, status, taint |
-| `add_node`, `update_node`, `remove_node` | edit nodes; `input_schema` comes from the kind's `paramschema` |
+| `add_node`, `update_node`, `remove_node` | edit nodes; `params` is an open object, because one tool cannot carry forty-nine schemas — the kind's `paramschema` comes from `list_node_kinds`, so the user and an agent still edit one vocabulary. `update_node` merges, and a `null` removes, exactly as `PATCH` does |
 | `connect`, `disconnect` | edit edges |
-| `set_context`, `load_table` | session state |
-| `run` | evaluate nodes, with progress through `send_progress` fed by the engine's stream loop |
-| `get_result_summary` | schema, row count, per-column summary statistics, head and tail |
-| `get_diagnostic` | a diagnostic's numeric summary: ACF/PACF values and significant lags, test statistics and p-values |
-| `fit_insample` | add a fit node on a port and return its residual summary — Ljung–Box p-values, significant residual ACF lags, information criteria |
+| `set_context`, `load_table` | session state; `load_table` reads a CSV or parquet path through the same DuckDB reader an upload goes through |
+| `run` | evaluate nodes and wait for them, with progress through `send_progress` fed by the engine's stream loop, throttled to the interval the event stream uses. Reports every node that errored, not only the targets: a target downstream of a failure is `blocked` and the error is upstream |
+| `get_result_summary` | `resultsummary`: schema, row count, per-column summary statistics, head and tail |
+| `get_diagnostic` | a diagnostic's numeric summary: ACF/PACF values and significant lags, test statistics and p-values. The plot-ready `data` is dropped unless `include_data` asks for it — the correlograms and the tests already carry their numbers in the summary, and the fan is the one that does not |
+| `fit_insample` | add a fit node on a port and return its residual summary — Ljung–Box p-values, significant residual ACF lags, information criteria. A fit that cannot be wired is taken back out; one that runs and fails stays, because it is the proposal being judged |
 | `export_julia` | the script |
-| `save`, `open` | persistence |
+| `save`, `open` | persistence; `open` is `opensession!`, so the session the browser is watching is the one that changes |
 | `get_web_url` | the local URL and, when `public_url` is set, the tailnet URL for a phone, to hand to the user |
 
 Resources expose the same state for clients that prefer reading to calling:
@@ -1052,7 +1067,7 @@ kind does not accept fails on that node rather than silently.
 Exports: `Lags`, `EMA`, `FitARMA`, `FittedARMA`, `ARMAFilter`, `lags`,
 `difference`, `logtransform`, `boxcox`, `ema`, `macd`, `ar`, `fitarma`,
 `applyarma`, `arma`, `fitonce`, `acf`, `pacf`, `ljungbox`, `adftest`,
-`fitreport`, `forecastfan`, `serve`, `serve_mcp` (Milestone 4), `exportjulia`.
+`fitreport`, `forecastfan`, `serve`, `serve_mcp`, `exportjulia`.
 `Loki.Acausal` and its `insample` are not in this list, for CausalFrames'
 reason: acausality is an explicit opt-in.
 
@@ -1140,14 +1155,16 @@ design.
    diagnostics and table, on a laptop and on a phone. The Julia suite covers the
    access-control list bullet by bullet; two Playwright projects, desktop and an
    iPhone profile that may only tap, drive the app against a live server.
-4. MCP mode.
+4. MCP mode. *Done:* `serve_mcp`, the seventeen tools and the two resources
+   above over ModelContextProtocol.jl's stdio transport against the same
+   session the browser has, `Loki.resultsummary` behind `get_result_summary`,
+   and tests that drive the server over a pipe in-process — including the one
+   that matters: an agent's edit arrives on the browser's WebSocket carrying
+   `origin = "mcp"`.
 5. Breadth: seasonal models in the UI, more diagnostics, undo and redo.
 
 ## Open questions
 
-- **ModelContextProtocol.jl alongside HTTP.jl.** Whether `start!` blocks, and on
-  which thread its handlers run next to `HTTP.serve!`, is to be confirmed at
-  implementation; the command-layer lock is the design's answer either way.
 - **Upstreaming.** Whether `Lags`, `EMA`, `difference` and a `CausalPipeline`
   run accessor belong in CausalFrames.
 - **Undo and redo** across two clients: a single linear history, or one per

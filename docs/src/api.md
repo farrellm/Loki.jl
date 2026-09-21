@@ -65,6 +65,7 @@ Loki.nodekinds
 Loki.DiagnosticResult
 Loki.seriesplot
 Loki.preview
+Loki.resultsummary
 Loki.columnvectors
 Loki.keyvalues
 Loki.lttb
@@ -120,7 +121,9 @@ Loki.currentorigin
 
 ```@docs
 serve
+serve_mcp
 Loki.Server
+Loki.MCPMode
 Loki.stop!
 Loki.server
 Loki.port

@@ -39,6 +39,7 @@
         ljungbox(frame, :y; lags = 5, dof = 0)
         Loki.seriesplot(frame, :y)
         Loki.preview(frame; limit = 5)
+        Loki.resultsummary(frame; head = 2, tail = 2)
 
         # A headless session: a graph built from node kinds, compiled, and
         # evaluated synchronously by freeze! (runs spawn tasks, which a
@@ -54,5 +55,16 @@
         exportjulia(session)
         # Saving and opening covers the JSON and the table snapshots with it.
         opensession(savesession(joinpath(dir, "precompile.loki.json"), session))
+
+        # The MCP tools, built and called against that same headless session, so
+        # an agent's first `list_node_kinds` and `get_graph` do not cost it the
+        # schema printer and the graph serializer. The transport is left out on
+        # purpose: `MCP.start!` spawns a read loop, and this workload must leave
+        # no task behind.
+        tools = Loki.mcptools(session)
+        for tool in tools
+            tool.name in ("list_node_kinds", "get_graph") &&
+                tool.handler(Dict{String,Any}())
+        end
     end
 end

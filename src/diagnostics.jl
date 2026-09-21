@@ -437,6 +437,212 @@ function preview(frame::CausalFrame; offset::Integer = 0, limit::Integer = 100,
             Dict{String,Any}("matched" => total, "returned" => length(rows))))
 end
 
+# --- the whole frame at a glance -----------------------------------------------
+#
+# What a node produced, small enough to read: the schema, the row count, a
+# statistic per column, and the first and last few rows. This is what an agent
+# gets back instead of the rows themselves, and what the table panel's header
+# can show. The statistics are accumulated in one streaming pass over
+# `Tables.partitions`; the per-column fold is a separate function so the inner
+# loop specializes on the column's concrete vector type instead of dispatching
+# once per cell.
+
+# Welford's running mean and variance: a single pass that a sum of squares
+# cannot match on a series whose values are large and whose spread is not. The
+# mean and the spread are measurements and so are floats; the extremes and the
+# ends are values of the column, and an integer among them stays an integer.
+mutable struct NumberAcc{T<:Real}
+    n::Int
+    missings::Int
+    mean::Float64
+    m2::Float64
+    min::Union{Nothing,T}
+    max::Union{Nothing,T}
+    first::Union{Nothing,T}
+    last::Union{Nothing,T}
+end
+
+NumberAcc{T}() where {T<:Real} =
+    NumberAcc{T}(0, 0, 0.0, 0.0, nothing, nothing, nothing, nothing)
+
+# Times are ordered but not summable: their extremes and ends, and nothing else.
+mutable struct OrderAcc{T}
+    n::Int
+    missings::Int
+    min::Union{Nothing,T}
+    max::Union{Nothing,T}
+    first::Union{Nothing,T}
+    last::Union{Nothing,T}
+end
+
+OrderAcc{T}() where {T} = OrderAcc{T}(0, 0, nothing, nothing, nothing, nothing)
+
+# Everything else — strings, symbols, a column of fitted models. Distinct values
+# are worth having for a key column and worthless for a column of models, so
+# they are collected up to `DISTINCTCAP` and abandoned past it.
+const DISTINCTCAP = 32
+
+mutable struct CellAcc
+    n::Int
+    missings::Int
+    distinct::Set{Any}
+    overflowed::Bool
+    first::Any
+    last::Any
+end
+
+CellAcc() = CellAcc(0, 0, Set{Any}(), false, nothing, nothing)
+
+accumulator(::Type{T}) where {T} = accumulator(Base.nonmissingtype(T), T)
+accumulator(::Type{B}, ::Type{T}) where {B<:Bool,T} = CellAcc()
+accumulator(::Type{B}, ::Type{T}) where {B<:Real,T} = NumberAcc{B}()
+accumulator(::Type{B}, ::Type{T}) where {B<:Union{Dates.Date,Dates.DateTime,Dates.Time},T} =
+    OrderAcc{B}()
+accumulator(::Type{B}, ::Type{T}) where {B,T} = CellAcc()
+
+function fold!(acc::NumberAcc{T}, col::AbstractVector, mask) where {T}
+    @inbounds for i in eachindex(col)
+        mask === nothing || mask[i] || continue
+        v = col[i]
+        if v === missing || !isfinite(v)
+            acc.missings += 1
+            continue
+        end
+        x = convert(T, v)
+        f = Float64(x)
+        acc.n += 1
+        d = f - acc.mean
+        acc.mean += d / acc.n
+        acc.m2 += d * (f - acc.mean)
+        (acc.min === nothing || x < acc.min) && (acc.min = x)
+        (acc.max === nothing || x > acc.max) && (acc.max = x)
+        acc.n == 1 && (acc.first = x)
+        acc.last = x
+    end
+    return acc
+end
+
+function fold!(acc::OrderAcc{T}, col::AbstractVector, mask) where {T}
+    @inbounds for i in eachindex(col)
+        mask === nothing || mask[i] || continue
+        v = col[i]
+        if v === missing
+            acc.missings += 1
+            continue
+        end
+        x = convert(T, v)
+        acc.n += 1
+        (acc.min === nothing || x < acc.min) && (acc.min = x)
+        (acc.max === nothing || x > acc.max) && (acc.max = x)
+        acc.n == 1 && (acc.first = x)
+        acc.last = x
+    end
+    return acc
+end
+
+function fold!(acc::CellAcc, col::AbstractVector, mask)
+    @inbounds for i in eachindex(col)
+        mask === nothing || mask[i] || continue
+        v = col[i]
+        if v === missing
+            acc.missings += 1
+            continue
+        end
+        acc.n += 1
+        if !acc.overflowed
+            push!(acc.distinct, v)
+            if length(acc.distinct) > DISTINCTCAP
+                acc.overflowed = true
+                empty!(acc.distinct)
+            end
+        end
+        acc.n == 1 && (acc.first = v)
+        acc.last = v
+    end
+    return acc
+end
+
+function accsummary(acc::NumberAcc)
+    std = acc.n < 2 ? nothing : jsonnumber(sqrt(acc.m2 / (acc.n - 1)))
+    return Dict{String,Any}("n" => acc.n, "missing" => acc.missings,
+        "mean" => acc.n == 0 ? nothing : jsonnumber(acc.mean), "std" => std,
+        "min" => jsoncell(acc.min), "max" => jsoncell(acc.max),
+        "first" => jsoncell(acc.first), "last" => jsoncell(acc.last))
+end
+
+accsummary(acc::OrderAcc) = Dict{String,Any}("n" => acc.n, "missing" => acc.missings,
+    "min" => jsoncell(acc.min), "max" => jsoncell(acc.max),
+    "first" => jsoncell(acc.first), "last" => jsoncell(acc.last))
+
+function accsummary(acc::CellAcc)
+    values =
+        acc.overflowed ? nothing :
+        sort!(Any[jsoncell(v) for v in acc.distinct]; by = string)
+    return Dict{String,Any}("n" => acc.n, "missing" => acc.missings,
+        "distinct" => acc.overflowed ? nothing : length(acc.distinct),
+        "values" => values,
+        "first" => jsoncell(acc.first), "last" => jsoncell(acc.last))
+end
+
+"""
+    Loki.resultsummary(frame::CausalFrame; columns = nothing, key = nothing,
+        head = 5, tail = 5) -> Loki.DiagnosticResult
+
+The whole frame at a glance: its schema and row count, one summary per column,
+and its first `head` and last `tail` rows. A numeric column reports `n`,
+`missing`, `mean`, `std`, `min`, `max`, `first` and `last`; a time column its
+extremes and ends; any other column its distinct values, up to
+`Loki.DISTINCTCAP` of them.
+
+This is what an agent reads instead of the rows — the summary is sized for a
+context window, and the rows themselves are in the browser.
+"""
+function resultsummary(frame::CausalFrame; columns = nothing, key = nothing,
+    head::Integer = 5, tail::Integer = 5)
+    head >= 0 || throw(ArgumentError("resultsummary head must not be negative"))
+    tail >= 0 || throw(ArgumentError("resultsummary tail must not be negative"))
+    sch = Tables.schema(frame)
+    wanted =
+        columns === nothing ? collect(Symbol, sch.names) :
+        Symbol[
+            Symbol(c) for c in
+            (columns isa Union{Symbol,AbstractString} ? (columns,) : columns)
+        ]
+    types = [columntype(sch, c) for c in wanted]
+    ks = keypairs(key)
+    for (col, _) in ks
+        schemaindex(sch, col)
+    end
+    accs = Any[accumulator(T) for T in types]
+    for part in Tables.partitions(frame)
+        nrow(part) == 0 && continue
+        mask = keymask(part, ks)
+        for (j, name) in enumerate(wanted)
+            fold!(accs[j], Tables.getcolumn(part, name), mask)
+        end
+    end
+    # The pages at either end come from `preview`, which already knows how to
+    # render a cell and how to count the rows a key matched.
+    front = preview(frame; offset = 0, limit = head, columns = wanted, key)
+    matched = front.summary["matched"]::Int
+    # The tail never repeats a row the head already showed.
+    back = max(Int(head), matched - Int(tail))
+    rear =
+        matched > back ?
+        preview(frame; offset = back, limit = matched-back, columns = wanted, key).data["rows"] :
+        Any[]
+    summaries = Any[
+        merge(Dict{String,Any}("name" => String(name), "type" => string(T)),
+            accsummary(acc)) for (name, T, acc) in zip(wanted, types, accs)
+    ]
+    return DiagnosticResult(:summary;
+        data = Dict{String,Any}("columns" => String.(wanted),
+            "types" => [string(T) for T in types], "head" => front.data["rows"],
+            "tail" => rear, "tailoffset" => back),
+        summary = merge(basesummary(frame, nothing, key),
+            Dict{String,Any}("matched" => matched, "columns" => summaries)))
+end
+
 # --- correlation ---------------------------------------------------------------
 #
 # ACF, PACF and Ljung-Box all assume evenly spaced observations, so each carries
@@ -1237,6 +1443,10 @@ const DIAGNOSTICKINDS = Dict{String,Any}(
         (frame, p) -> preview(frame; offset = queryint(p, "offset", 0),
             limit = queryint(p, "limit", 100), columns = querycolumns(p),
             key = querykey(p)),
+    "summary" =>
+        (frame, p) -> resultsummary(frame; columns = querycolumns(p),
+            key = querykey(p), head = queryint(p, "head", 5),
+            tail = queryint(p, "tail", 5)),
     "acf" =>
         (frame, p) -> acf(frame, querycolumn(p); lags = queryint(p, "lags"),
             key = querykey(p), level = queryfloat(p, "level", 0.95)),

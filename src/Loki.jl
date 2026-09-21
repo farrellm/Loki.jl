@@ -35,10 +35,16 @@ using MatrixEquations: lyapd
 # Imported as a module: StateSpaceModels exports a `LinearRegression` that would
 # clash with CausalFrames'.
 import StateSpaceModels as SSM
+# Imported as a module: ModelContextProtocol exports a `Server`, a `stop!`, a
+# `connect` and a `Transport`, every one of which Loki already has a name for.
+import ModelContextProtocol as MCP
+# The MCP server takes the global logger and never gives it back; Loki hands it
+# over and takes it again when the server stops.
+import Logging
 
 export Lags, EMA, FitARMA, FittedARMA, ARMAFilter, lags, difference, logtransform,
     boxcox, ema, macd, ar, fitarma, applyarma, arma, fitonce, exportjulia,
-    acf, pacf, adftest, ljungbox, fitreport, forecastfan, serve
+    acf, pacf, adftest, ljungbox, fitreport, forecastfan, serve, serve_mcp
 
 include("timeseries/summarizers.jl")
 include("timeseries/operators.jl")
@@ -59,6 +65,9 @@ include("session.jl")
 include("export.jl")
 include("persist.jl")
 include("server.jl")
+# After the server: MCP mode is the web server plus a JSON-RPC transport over
+# the same session, and its tools answer with the server's own JSON shapes.
+include("mcp.jl")
 include("precompile.jl")
 
 end

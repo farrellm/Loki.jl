@@ -7,9 +7,9 @@ of the graph as a plain Julia script.
 **DESIGN.md is the source of truth for the design and must be kept in sync
 with any API or semantics change.** Its "Milestones" section is the roadmap;
 Milestones 0 (scaffolding), 1 (operators, `insample`, graph, engine), 2
-(`emit`, `exportjulia`, table snapshots, `.loki.json`) and 3 (diagnostics,
-events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
-(MCP mode) is next.
+(`emit`, `exportjulia`, table snapshots, `.loki.json`), 3 (diagnostics, events,
+the HTTP server and WebSocket, and the web app) and 4 (MCP mode) are done;
+Milestone 5 (breadth) is next.
 
 ## Layout
 
@@ -24,7 +24,8 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
   substitution, `NodeError`), `engine.jl` (result cache, runs on a worker
   task), `session.jl` (the session and its lock), `usercode.jl`
 - `src/events.jl`: session events, broadcast under the lock with a monotonic
-  `seq`; `src/server.jl`: static bundle, REST API, WebSocket, access control
+  `seq`; `src/server.jl`: static bundle, REST API, WebSocket, access control;
+  `src/mcp.jl`: the MCP tools and resources, and `serve_mcp`
 - `src/export.jl` (`exportjulia` and its printer), `persist.jl` (`.loki.json`),
   `tables.jl` (table snapshots)
 - `web/src/`: React app: `api.ts` REST client, `ws.ts` event socket,
@@ -38,6 +39,9 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
 - A test file cannot be `include`d on its own: `persist.jl` needs `simulate`
   from `arma.jl` and `comparable` from `export.jl`, and all of them need
   `fixtures.jl`. Run the whole suite — it takes about five minutes
+- `test/mcp.jl` is the exception — it is self-contained, so
+  `julia --project -e 'using Test, Loki, CausalFrames, DataFrames; include("test/mcp.jl")'`
+  runs it in about forty seconds, which is the way to iterate on `src/mcp.jl`
 - Build docs: `julia --project=docs docs/make.jl` (one-time setup:
   `julia --project=docs -e 'using Pkg; Pkg.instantiate()'`; `docs/Project.toml`
   sources Loki from `..`, so after adding a dependency run
@@ -48,15 +52,24 @@ events, the HTTP server and WebSocket, and the web app) are done; Milestone 4
   `docs/src/index.md` is gitignored, so edit the README
 - Formatting is automatic: a `Stop` hook in `.claude/settings.json` formats
   modified `.jl` files once per turn (config in `.JuliaFormatter.toml`; CI
-  pins JuliaFormatter v2, so don't format with a v1 install)
+  pins JuliaFormatter v2, so don't format with a v1 install). The hook only runs
+  at the end of a turn, so when committing mid-turn, format first:
+  `git ls-files -z -mo --exclude-standard -- '*.jl' | xargs -0 -r julia -e
+  'using JuliaFormatter; foreach(format, ARGS)' --`
 - Run one Julia process at a time — concurrent test/docs runs race on the
   precompile cache and fail transiently
+- `Pkg.test` precompiles Loki when it starts, so `src/` edits made after a run
+  begins are **not** in that run — a green result from a run you edited under
+  means nothing. Kill it and start again
 - Golden files live in `test/golden/` and end in `.jl.txt`, not `.jl`: the
   formatting hook rewrites every modified `*.jl`, and a golden script has to
   stay exactly as the exporter printed it. Regenerate with
   `LOKI_UPDATE_GOLDEN=1 julia --project -e 'using Pkg; Pkg.test()'`
 - Add a dependency: `julia --project -e 'using Pkg; Pkg.add("Name")'`, then a
-  `[compat]` entry (Aqua checks it). Julia 1.12's `Pkg.add` writes its own
+  `[compat]` entry (Aqua checks it). The first suite run after this takes
+  several minutes longer than usual: the test environment and Aqua's
+  persistent-tasks check each precompile Loki afresh, ~90s apiece, before any
+  test prints. Julia 1.12's `Pkg.add` writes its own
   `[compat]` line too — remove the duplicate. Test-only deps go in `[extras]`
   and `[targets]` instead. Only add a dependency in the commit that first uses
   it — Aqua's stale-deps check fails on an unused one
