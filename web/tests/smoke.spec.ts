@@ -306,6 +306,52 @@ test('badges an acausal fit and everything downstream of it', async ({ page }) =
   await expect(page.locator('.residuals__cell')).toHaveCount(6)
 })
 
+test('keeps a moved node on the canvas through the refetches that follow', async ({
+  page,
+}) => {
+  await open(page)
+  await collapseSheet(page)
+  const card = page.getByTestId('node-n1')
+  const position = () =>
+    page.evaluate(async () => {
+      const graph = await (
+        await fetch('/api/graph', { credentials: 'same-origin' })
+      ).json()
+      return graph.nodes.find((n: { id: string }) => n.id === 'n1').position as number[]
+    })
+  const start = await position()
+
+  // Playwright has no touch drag for WebKit, so the phone taps — which selects
+  // the node, the start of every drag — and the desktop drags. Either way a
+  // selection, a move and a refetch land together; each refetch used to hand
+  // React Flow unmeasured nodes, and one that landed at the wrong moment left
+  // the node hidden until a reload.
+  if (narrow(page)) {
+    await card.tap()
+  } else {
+    const box = (await card.boundingBox())!
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 40, {
+      steps: 8,
+    })
+    await page.mouse.up()
+    await expect.poll(position).not.toEqual(start)
+  }
+
+  // A move from outside the app is one more refetch, of the node just touched.
+  await page.evaluate(async (at) => {
+    await fetch('/api/nodes/n1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ position: at }),
+    })
+  }, start)
+  await expect.poll(position).toEqual(start)
+  await expect(card).toBeVisible()
+})
+
 test('learns about a change it did not make itself', async ({ page, context }) => {
   await open(page)
   const before = await page.locator('.node').count()
