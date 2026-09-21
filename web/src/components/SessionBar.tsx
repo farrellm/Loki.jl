@@ -89,7 +89,9 @@ export function SessionBar({
           onClick={onMenu}
           aria-label="Menu"
         >
-          ≡
+          <svg width="20" height="14" viewBox="0 0 20 14" aria-hidden="true">
+            <path d="M0 1h20M0 7h20M0 13h20" stroke="currentColor" strokeWidth="2" />
+          </svg>
         </button>
         <span className="bar__name">Loki</span>
         <button
