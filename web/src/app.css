@@ -121,9 +121,10 @@
 
 .bar__menu {
   display: none;
+  align-items: center;
+  justify-content: center;
   min-width: var(--tap);
-  font-size: var(--t-l);
-  line-height: 1;
+  color: var(--ink);
 }
 
 .bar__window {
@@ -232,6 +233,27 @@
   height: 26px;
 }
 
+/* React Flow's zoom and fit controls take the theme through the library's own
+   variables: its defaults are a white card with a shadow in either scheme. */
+.react-flow {
+  --xy-controls-button-background-color: var(--panel);
+  --xy-controls-button-background-color-hover: color-mix(
+    in srgb,
+    var(--ink) 6%,
+    var(--panel)
+  );
+  --xy-controls-button-color: var(--ink-quiet);
+  --xy-controls-button-color-hover: var(--ink);
+  --xy-controls-button-border-color: var(--rule);
+  --xy-controls-box-shadow: none;
+}
+
+.react-flow__controls {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
 /* React Flow puts its zoom and fit controls bottom left, which is exactly where
    the sheet is. They move to the top, which no sheet height covers. */
 .app--narrow .react-flow__controls {
@@ -242,6 +264,11 @@
 .app--narrow .react-flow__controls button {
   width: var(--tap);
   height: var(--tap);
+}
+
+.app--narrow .react-flow__controls button svg {
+  max-width: 16px;
+  max-height: 16px;
 }
 
 .app--narrow .bar__toggles,
