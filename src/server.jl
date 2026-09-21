@@ -147,8 +147,8 @@ overtls(srv::Server, req::HTTP.Request) =
     (
         srv.public_url !== nothing && startswith(srv.public_url, "https://") &&
         (
-            HTTP.header(req, "Origin", "") == rstrip(srv.public_url, '/') ||
-            HTTP.header(req, "Host", "") == urlhost(srv.public_url)
+            HTTP.header(req, "Origin", "") in urlorigins(srv.public_url) ||
+            HTTP.header(req, "Host", "") in urlhosts(srv.public_url)
         )
     )
 
@@ -169,23 +169,36 @@ end
 
 # --- origin and host -------------------------------------------------------------
 
-urlhost(url::AbstractString) = HTTP.URI(url).host
+# `tailscale serve --https=8443` puts the port in `public_url`, and so in every
+# `Host` and `Origin` that arrives through it. A client sends the scheme's
+# default port or omits it, so that one is accepted both ways.
+function urlport(url::AbstractString)
+    uri = HTTP.URI(url)
+    default = uri.scheme == "http" ? "80" : "443"
+    return uri, (isempty(uri.port) ? default : uri.port), default
+end
+
+function urlhosts(url::AbstractString)
+    uri, port, default = urlport(url)
+    hosts = ["$(uri.host):$port"]
+    port == default && push!(hosts, uri.host)
+    return hosts
+end
+
+urlorigins(url::AbstractString) =
+    (uri = first(urlport(url)); ["$(uri.scheme)://$h" for h in urlhosts(url)])
 
 function allowedorigins(port::Integer, public_url)
     out = Set(["http://127.0.0.1:$port", "http://localhost:$port",
         "http://[::1]:$port"])
-    public_url === nothing || push!(out, String(rstrip(public_url, '/')))
+    public_url === nothing || union!(out, urlorigins(public_url))
     return out
 end
 
 function allowedhosts(port::Integer, public_url)
     out = Set(["127.0.0.1:$port", "localhost:$port", "[::1]:$port",
         "127.0.0.1", "localhost"])
-    if public_url !== nothing
-        host = urlhost(public_url)
-        push!(out, host)
-        push!(out, "$host:443")
-    end
+    public_url === nothing || union!(out, urlhosts(public_url))
     return out
 end
 
@@ -1113,7 +1126,9 @@ Loki.serve(; port = 8712, public_url = "https://workstation.example-tailnet.ts.n
 ```
 
 `public_url` is accepted as an origin and host, is used to print the second URL,
-and tells the cookie to be `Secure`. Nothing else about it changes.
+and tells the cookie to be `Secure`. Nothing else about it changes. When
+`tailscale serve` listens on a port other than 443 (`--https=8443`), that port
+belongs in `public_url` too: `"https://workstation.example-tailnet.ts.net:8443"`.
 """
 function serve(s::Session; port::Integer = 8712,
     public_url = get(ENV, "LOKI_PUBLIC_URL", nothing),

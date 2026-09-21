@@ -812,6 +812,12 @@ Loki.serve(; port = 8712, public_url = "https://workstation.example-tailnet.ts.n
 The startup message, and the MCP `get_web_url` tool, give the local URL and,
 when `public_url` is set, the public one, both carrying the token.
 
+When `tailscale serve` listens on a port other than 443
+(`tailscale serve --bg --https=8443 8712`), the port is part of `public_url`
+(`"https://workstation.example-tailnet.ts.net:8443"`), since it is part of
+every `Host` and `Origin` that arrives through it. The scheme's default port is
+accepted with or without it.
+
 **The token survives iOS.** It arrives in the URL *fragment*, which browsers
 never send to a server or put in a `Referer`. On first load the app exchanges it
 once for a session cookie — `HttpOnly`, `SameSite=Strict`, and `Secure` when

@@ -107,6 +107,26 @@ end
                 headers = ["Host" => "evil.example:$(ctx.port)"]).status == 403
             @test ask(ctx, "GET", "/api/graph";
                 headers = ["Host" => "localhost:$(ctx.port)"]).status == 200
+            for good in ("ws.example-tailnet.ts.net", "ws.example-tailnet.ts.net:443")
+                @test ask(ctx, "GET", "/api/graph"; headers = ["Host" => good]).status ==
+                      200
+            end
+        end
+
+        # `tailscale serve --https=8443`: the port is in every `Host` and
+        # `Origin`, and the default one no longer stands in for it.
+        withserver(; public_url = "https://ws.example-tailnet.ts.net:8443/") do ctx
+            for (name, value) in (("Host", "ws.example-tailnet.ts.net:8443"),
+                ("Origin", "https://ws.example-tailnet.ts.net:8443"))
+                @test ask(ctx, "GET", "/api/graph"; headers = [name => value]).status ==
+                      200
+            end
+            for (name, value) in (("Host", "ws.example-tailnet.ts.net"),
+                ("Host", "ws.example-tailnet.ts.net:443"),
+                ("Origin", "https://ws.example-tailnet.ts.net"))
+                @test ask(ctx, "GET", "/api/graph"; headers = [name => value]).status ==
+                      403
+            end
         end
     end
 
