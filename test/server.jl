@@ -348,6 +348,11 @@ end
                 body = Dict("timetype" => "Int64", "start" => 0, "stop" => 11)).status ==
                   200
             @test ctx.s.contexts["preview"] == Context(0, 11)
+            @test ask(ctx, "DELETE", "/api/contexts/preview").status == 200
+            @test !haskey(ctx.s.contexts, "preview")
+            @test ask(ctx, "DELETE", "/api/contexts/preview").status == 404
+            @test ask(ctx, "DELETE", "/api/contexts/analysis").status == 400
+            @test haskey(ctx.s.contexts, "analysis")
 
             csv = "time,y\n1,1.5\n2,2.5\n3,3.5\n"
             up = HTTP.request("POST", ctx.base * "/api/tables/uploaded?format=csv",

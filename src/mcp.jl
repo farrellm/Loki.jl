@@ -298,6 +298,11 @@ function setcontexttool(s::Session, args::AbstractDict)
     return Dict{String,Any}("name" => name, "context" => contextevent(ctx))
 end
 
+function removecontexttool(s::Session, args::AbstractDict)
+    removecontext!(s, needsstring(args, "name"))
+    return Dict{String,Any}("ok" => true)
+end
+
 # A CSV or parquet on the machine Loki runs on, read into memory through the
 # same DuckDB reader an upload from the browser goes through.
 function loadtabletool(s::Session, args::AbstractDict)
@@ -376,6 +381,12 @@ edittools(s::Session) = MCP.MCPTool[
             "stop" => Dict{String,Any}("description" => "the window's stop")),
         ("name", "timetype", "start", "stop"),
         handling(args -> setcontexttool(s, args))),
+    mcptool("remove_context",
+        "Remove a named context. `analysis` cannot be removed, only changed \
+        with `set_context`. A node whose parameters still name the context \
+        fails when it is next run.",
+        Dict("name" => prop("string", "the context's name")), ("name",),
+        handling(args -> removecontexttool(s, args)); destructive = true),
     mcptool("load_table",
         "Read a CSV or parquet file on the machine Loki runs on into memory \
         under a name, which a `table` or `lookupjoin` node then refers to.",

@@ -142,7 +142,7 @@ live one untouched.
 
 The headless session of Milestone 1 has all of this but the subscribers and
 events: `Session(; tables, contexts, prelude, cachebytes)`; `setcontext!`,
-`addtable!` and `setprelude!`; `addnode!`, `updatenode!`, `removenode!`,
+`removecontext!`, `addtable!` and `setprelude!`; `addnode!`, `updatenode!`, `removenode!`,
 `connect!` and `disconnect!`, each invalidating the node it touches and
 everything downstream; `run!`, `cancel!`, `write!` and `freeze!`; and `status`,
 `nodeerror`, `result` and `isacausal` to read the outcome back.
@@ -154,7 +154,10 @@ node invents. A session always has `analysis`, the window nodes are evaluated
 over, and may define more — `train`, `test`, a short `preview` — that node
 parameters refer to by name. A context's time type is chosen when it is
 created and must match the sources' time type; the UI offers the time type of
-the first source added.
+the first source added. Any context but `analysis` can be removed; nothing is
+invalidated, because results are cached by a context's value rather than its
+name, and a node that still names it fails at its next build as it would for a
+name that never existed.
 
 ## Node catalog
 
@@ -835,7 +838,7 @@ or the cookie.
 | `GET` | `/api/graph` | the whole graph, with status and taint |
 | `POST` / `PATCH` / `DELETE` | `/api/nodes[/:id]` | add, edit, remove a node; `PATCH` merges `params` (a `null` removes one) and moves a node by `position`, which invalidates nothing |
 | `POST` / `DELETE` | `/api/edges[/:id]` | connect, disconnect |
-| `GET` / `PUT` | `/api/contexts[/:name]` | named contexts |
+| `GET` / `PUT` / `DELETE` | `/api/contexts[/:name]` | named contexts; `analysis` can be changed but not removed |
 | `GET` / `POST` | `/api/tables[/:name]` | list, upload |
 | `POST` | `/api/run`, `/api/cancel`, `/api/write/:id` | evaluation |
 | `GET` | `/api/results/:id/:port` | schema, row count, paged rows |
@@ -927,7 +930,7 @@ and the loop is blocked in `readline`.
 | `get_graph` | nodes, edges, params, status, taint |
 | `add_node`, `update_node`, `remove_node` | edit nodes; `params` is an open object, because one tool cannot carry forty-nine schemas — the kind's `paramschema` comes from `list_node_kinds`, so the user and an agent still edit one vocabulary. `update_node` merges, and a `null` removes, exactly as `PATCH` does |
 | `connect`, `disconnect` | edit edges |
-| `set_context`, `load_table` | session state; `load_table` reads a CSV or parquet path through the same DuckDB reader an upload goes through |
+| `set_context`, `remove_context`, `load_table` | session state; `load_table` reads a CSV or parquet path through the same DuckDB reader an upload goes through |
 | `run` | evaluate nodes and wait for them, with progress through `send_progress` fed by the engine's stream loop, throttled to the interval the event stream uses. Reports every node that errored, not only the targets: a target downstream of a failure is `blocked` and the error is upstream |
 | `get_result_summary` | `resultsummary`: schema, row count, per-column summary statistics, head and tail |
 | `get_diagnostic` | a diagnostic's numeric summary: ACF/PACF values and significant lags, test statistics and p-values. The plot-ready `data` is dropped unless `include_data` asks for it — the correlograms and the tests already carry their numbers in the summary, and the fan is the one that does not |

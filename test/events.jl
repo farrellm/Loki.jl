@@ -41,6 +41,7 @@ end
                 Loki.setposition!(s, sm, (40, 90))
                 Loki.updatenode!(s, sm, Dict("column" => "x", "span" => 7))
                 Loki.setcontext!(s, "preview", Context(0, 11))
+                Loki.removecontext!(s, "preview")
                 Loki.setprelude!(s, "helper(x) = x + 1")
                 Loki.addtable!(s, "other", DataFrame(time = 1:3, y = [1.0, 2.0, 3.0]))
                 Loki.disconnect!(s, edge)
@@ -48,7 +49,8 @@ end
             end,
         )
         @test changes(seen) == ["addnode", "addnode", "connect", "position",
-            "updatenode", "setcontext", "setprelude", "addtable", "disconnect",
+            "updatenode", "setcontext", "removecontext", "setprelude", "addtable",
+            "disconnect",
             "removenode"]
         # Every event is numbered, in order, with no repeats.
         @test [e.seq for e in seen] == collect(1:length(seen))

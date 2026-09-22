@@ -118,7 +118,7 @@ end
             names = sort([String(t.name) for t in r.result.tools])
             @test names == sort(["list_node_kinds", "get_graph", "add_node",
                 "update_node", "remove_node", "connect", "disconnect",
-                "set_context", "load_table", "run", "get_result_summary",
+                "set_context", "remove_context", "load_table", "run", "get_result_summary",
                 "get_diagnostic", "fit_insample", "export_julia", "save", "open",
                 "get_web_url"])
             for t in r.result.tools
@@ -219,6 +219,10 @@ end
             ctxs = called(c, "get_graph").contexts
             @test ctxs.preview.start == 0 && ctxs.preview.stop == 11
             @test String(ctxs.preview.timetype) == "Int64"
+            @test called(c, "remove_context", Dict("name" => "preview")).ok
+            @test !haskey(called(c, "get_graph").contexts, :preview)
+            payload, failed = call(c, "remove_context", Dict("name" => "analysis"))
+            @test failed && occursin("analysis", String(payload.error))
 
             dir = mktempdir()
             path = joinpath(dir, "prices.csv")
