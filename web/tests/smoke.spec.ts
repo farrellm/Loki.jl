@@ -383,6 +383,67 @@ test('learns about a change it did not make itself', async ({ page, context }) =
   await expect(page.locator('.node')).toHaveCount(before)
 })
 
+test('adds, edits and removes a context from the bar', async ({ page }, info) => {
+  await open(page)
+  // Both projects share one server, so each works on a context of its own, and
+  // clears what a failed earlier attempt may have left behind.
+  const name = `holdout_${info.project.name}`
+  await page.evaluate(async (n) => {
+    await fetch(`/api/contexts/${n}`, { method: 'DELETE', credentials: 'same-origin' })
+  }, name)
+  const contexts = () =>
+    page.evaluate(async () =>
+      (await fetch('/api/contexts', { credentials: 'same-origin' })).json(),
+    )
+
+  // The window in the bar is the button that edits it, at every width.
+  await expect(page.getByTestId('session-window')).toHaveText('0 → 401')
+  await tap(page, page.getByTestId('session-window'))
+  const band = page.getByTestId('contexts')
+  await expect(band).toBeVisible()
+  await expect(page.getByTestId('context-analysis')).toContainText('0 → 401')
+  await expect(page.getByTestId('context-train')).toContainText('0 → 201')
+
+  // A new context starts from the analysis window; a bad value is refused in
+  // place, and never sent.
+  await tap(page, page.getByTestId('context-add'))
+  await page.getByTestId('context-name').fill(name)
+  await expect(page.getByTestId('context-start')).toHaveValue('0')
+  await page.getByTestId('context-start').fill('3x')
+  await expect(page.getByTestId('context-problem')).toHaveText(
+    'The start is not an Int64, such as 0.',
+  )
+  await expect(page.getByTestId('context-save')).toBeDisabled()
+  await page.getByTestId('context-start').fill('201')
+  // The interval redraws as it is typed, before anything is saved.
+  await expect(page.getByTestId('context-draft')).toBeVisible()
+  await tap(page, page.getByTestId('context-save'))
+  await expect(page.getByTestId(`context-${name}`)).toContainText('201 → 401')
+  expect((await contexts())[name]).toEqual({ timetype: 'Int64', start: 201, stop: 401 })
+
+  // Editing keeps the name and changes the window.
+  await tap(page, page.getByTestId(`context-${name}`).locator('.contexts__pick'))
+  await page.getByTestId('context-stop').fill('350')
+  await page.getByTestId('context-stop').press('Enter')
+  await expect(page.getByTestId(`context-${name}`)).toContainText('201 → 350')
+  expect((await contexts())[name].stop).toBe(350)
+
+  // Removing takes two taps, and analysis cannot be removed at all.
+  await tap(page, page.getByTestId('context-analysis').locator('.contexts__pick'))
+  await expect(page.getByTestId('context-remove')).toHaveCount(0)
+  await tap(page, page.getByTestId(`context-${name}`).locator('.contexts__pick'))
+  await tap(page, page.getByTestId('context-remove'))
+  await expect(page.getByTestId(`context-${name}`)).toBeVisible()
+  await tap(page, page.getByTestId('context-remove-confirm'))
+  await expect(page.getByTestId(`context-${name}`)).toHaveCount(0)
+  expect(name in (await contexts())).toBe(false)
+
+  // Escape closes the band, and focus goes back to the button that opened it.
+  await page.keyboard.press('Escape')
+  await expect(band).toBeHidden()
+  await expect(page.getByTestId('session-window')).toBeFocused()
+})
+
 test('saves the analysis to a path on the server and opens it again', async ({
   page,
 }) => {
