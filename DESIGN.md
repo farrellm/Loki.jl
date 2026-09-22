@@ -720,6 +720,18 @@ A single-page app written in TypeScript with Vite and React:
   open and save, the file the session is looking at, and the origin of the most
   recent change (you or the agent). The file's name is itself the button that
   saves somewhere else, and `Save` overwrites the file the session knows.
+- **Contexts** — the analysis window in the session bar is the button that
+  opens them, as the file name is the button that saves elsewhere; a session
+  with no `analysis` says "Set the analysis window" there instead. A band
+  hanging off the bar like the file picker, whose list is a timeline: every
+  context is drawn as an interval on one axis shared by the contexts of the
+  session's time type, so `train` inside `analysis` is seen rather than worked
+  out. A row opens in place into its time type, start and stop; the interval
+  redraws dashed at the values being typed, and a value that does not parse,
+  a start after the stop, or a name that is not a Julia identifier (the
+  exporter writes contexts as `const` bindings) is refused there, before
+  anything is sent. Removing takes a second tap and first says which nodes
+  still name the context; `analysis` has no remove.
 - **File picker** — a path on the machine Loki is running on, over
   `/api/files`. A band hanging off the session bar rather than a floating
   dialog, with the path as its subject: one line that is at once the
