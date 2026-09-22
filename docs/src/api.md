@@ -187,6 +187,7 @@ Loki.taint
 ```@docs
 Loki.Session
 Loki.setcontext!
+Loki.removecontext!
 Loki.addtable!
 Loki.run!
 Loki.Run

@@ -128,9 +128,20 @@
 }
 
 .bar__window {
+  min-height: var(--control);
+  padding: 0 6px;
   font-size: var(--t-s);
   color: var(--ink-quiet);
   white-space: nowrap;
+}
+
+/* No analysis window means nothing can run, so the way to set one is not
+   quiet. */
+.bar__window--none {
+  font-family: var(--ui);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .bar__actions {
@@ -271,8 +282,7 @@
   max-height: 16px;
 }
 
-.app--narrow .bar__toggles,
-.app--narrow .bar__window {
+.app--narrow .bar__toggles {
   display: none;
 }
 
@@ -943,7 +953,8 @@
   background: var(--scrim);
 }
 
-.picker {
+.picker,
+.contexts {
   position: fixed;
   top: 52px;
   left: 0;
@@ -960,7 +971,8 @@
   background: var(--panel);
 }
 
-.picker__head {
+.picker__head,
+.contexts__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1105,7 +1117,8 @@
   border-top: 1px solid var(--rule);
 }
 
-.app--narrow .picker {
+.app--narrow .picker,
+.app--narrow .contexts {
   width: 100%;
   border-right: none;
 }
@@ -1120,6 +1133,280 @@
 
 .app--narrow .picker__typed {
   font-size: var(--t-m);
+}
+
+/* --- the contexts -------------------------------------------------------- */
+
+/* The same band as the file picker, a little wider: its rows are a timeline,
+ * and an interval needs room to be read against the others.
+ */
+.contexts {
+  width: min(84ch, 100%);
+}
+
+.contexts__intro {
+  margin: 0;
+  padding: 10px var(--gap);
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+}
+
+/* One grid for every row, so every track starts and ends at the same x and the
+ * intervals share an axis. Rows are subgrids of it.
+ */
+.contexts__list {
+  display: grid;
+  grid-template-columns: max-content minmax(8rem, 1fr) max-content;
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 0 4px;
+  border-top: 1px solid var(--rule);
+  list-style: none;
+}
+
+.contexts__row,
+.contexts__axis,
+.contexts__pick {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+}
+
+.contexts__row {
+  border-bottom: 1px solid var(--rule);
+}
+
+.contexts__row--on {
+  background: var(--selected);
+}
+
+.contexts__axis {
+  padding: 8px var(--gap) 0;
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.contexts__ends {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.contexts__pick {
+  column-gap: var(--gap);
+  width: 100%;
+  min-height: 40px;
+  padding: 6px var(--gap);
+  border: none;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+
+.contexts__name {
+  font-size: var(--t-s);
+  font-weight: 600;
+}
+
+.contexts__range {
+  font-size: var(--t-s);
+  color: var(--ink-quiet);
+  text-align: right;
+}
+
+/* The track: a hairline for the axis, and on it the context's interval drawn
+ * as an interval is written on a chart — a line with a tick at each end.
+ */
+.contexts__track {
+  position: relative;
+  align-self: stretch;
+  min-height: 14px;
+}
+
+.contexts__track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--rule);
+}
+
+.contexts__span {
+  position: absolute;
+  top: 50%;
+  height: 12px;
+  transform: translateY(-50%);
+  border-left: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  color: var(--ink-quiet);
+}
+
+.contexts__span::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 2px solid currentColor;
+  transform: translateY(-50%);
+}
+
+/* `analysis` is the window runs use, so it is the one drawn in full ink. */
+.contexts__row--analysis .contexts__span {
+  color: var(--ink);
+}
+
+/* While a context is edited: what it was, faint, and what it will be, dashed —
+ * a value that is not saved yet.
+ */
+.contexts__row .contexts__span--was {
+  color: var(--ink-faint);
+}
+
+.contexts__row .contexts__span--draft {
+  color: var(--ink);
+}
+
+.contexts__span--draft::before {
+  border-top-style: dashed;
+}
+
+.contexts__other {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+  background: var(--panel);
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.contexts__row--on .contexts__other {
+  background: none;
+}
+
+.contexts__add {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 var(--gap);
+  border: none;
+  background: none;
+  color: var(--signal);
+  font-weight: 600;
+}
+
+.contexts__form {
+  grid-column: 1 / -1;
+  padding: 4px var(--gap) 12px;
+}
+
+.contexts__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 8px var(--gap);
+}
+
+.contexts__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.contexts__field input,
+.contexts__field select {
+  color: var(--ink);
+}
+
+.contexts__problem,
+.contexts__note {
+  margin: 8px 0 0;
+  font-size: var(--t-s);
+}
+
+.contexts__problem {
+  color: var(--alarm);
+}
+
+.contexts__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.contexts__spacer {
+  flex: 1;
+}
+
+.contexts__remove {
+  color: var(--alarm);
+}
+
+/* Quiet, it lines up with the fields above it rather than with its padding. */
+.contexts__remove.quiet {
+  padding-left: 0;
+}
+
+.contexts__remove--sure {
+  border-color: var(--alarm);
+}
+
+/* Below the breakpoint a row is two lines: the name and its values, then the
+ * track at the full width of the screen, which is the only width a phone has
+ * to show an interval in.
+ */
+.app--narrow .contexts__list {
+  grid-template-columns: 1fr max-content;
+}
+
+.app--narrow .contexts__pick,
+.app--narrow .contexts__axis {
+  grid-template-areas:
+    'name range'
+    'track track';
+  row-gap: 6px;
+}
+
+.app--narrow .contexts__pick {
+  min-height: var(--tap);
+  padding-block: 10px;
+}
+
+.app--narrow .contexts__name {
+  grid-area: name;
+}
+.app--narrow .contexts__range {
+  grid-area: range;
+}
+.app--narrow .contexts__track,
+.app--narrow .contexts__ends {
+  grid-area: track;
+}
+
+.app--narrow .contexts__axis > span:empty {
+  display: none;
+}
+
+/* Start and stop side by side, the pair they are; the rest take the line. */
+.app--narrow .contexts__fields {
+  grid-template-columns: 1fr 1fr;
+}
+
+.app--narrow .contexts__field--wide {
+  grid-column: 1 / -1;
+}
+
+.app--narrow .contexts__add {
+  min-height: var(--tap);
 }
 
 /* --- notices -------------------------------------------------------------- */

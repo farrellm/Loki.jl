@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { trapTab } from '../focus'
 import {
   basename,
   formatModified,
@@ -306,22 +307,3 @@ export function FilePicker({
 const isTextEntry = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.tagName === 'INPUT' || target.isContentEditable)
-
-// The band is modal, so Tab stays inside it. There is nothing else in the app
-// that needs this, which is why it lives here rather than in a helper module.
-function trapTab(e: React.KeyboardEvent, band: HTMLElement | null) {
-  if (band === null) return
-  const focusable = [
-    ...band.querySelectorAll<HTMLElement>('button:not(:disabled), input'),
-  ]
-  if (focusable.length === 0) return
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (!e.shiftKey && document.activeElement === last) {
-    e.preventDefault()
-    first.focus()
-  } else if (e.shiftKey && document.activeElement === first) {
-    e.preventDefault()
-    last.focus()
-  }
-}

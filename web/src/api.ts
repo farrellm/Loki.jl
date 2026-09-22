@@ -73,7 +73,13 @@ export const api = {
   disconnect: (id: string) => request<unknown>('DELETE', `/api/edges/${id}`),
 
   setContext: (name: string, timetype: string, start: unknown, stop: unknown) =>
-    request<unknown>('PUT', `/api/contexts/${name}`, { timetype, start, stop }),
+    request<unknown>('PUT', `/api/contexts/${encodeURIComponent(name)}`, {
+      timetype,
+      start,
+      stop,
+    }),
+  removeContext: (name: string) =>
+    request<unknown>('DELETE', `/api/contexts/${encodeURIComponent(name)}`),
 
   run: (targets: (string | [string, string])[], context = 'analysis') =>
     request<unknown>('POST', '/api/run', { targets, context }),

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { api } from '../api'
+import { Contexts } from './Contexts'
 import { FilePicker } from './FilePicker'
 import { basename, parentOf } from '../paths'
 import type { SessionStore } from '../store'
@@ -28,18 +29,31 @@ export function SessionBar({
   const { graph, connected, running, lastOrigin, act, note, resync } = store
   const [busy, setBusy] = useState(false)
   const [picking, setPicking] = useState<'open' | 'save' | null>(null)
-  // Focus goes back where it came from when the picker closes.
+  const [editing, setEditing] = useState(false)
+  // Focus goes back where it came from when a band closes.
   const opener = useRef<HTMLButtonElement | null>(null)
   const analysis = graph?.contexts.analysis
   const file = graph?.file ?? null
 
   const openPicker = (mode: 'open' | 'save', from: HTMLButtonElement | null) => {
     opener.current = from
+    setEditing(false)
     setPicking(mode)
   }
 
   const closePicker = () => {
     setPicking(null)
+    opener.current?.focus()
+  }
+
+  const openContexts = (from: HTMLButtonElement | null) => {
+    opener.current = from
+    setPicking(null)
+    setEditing(true)
+  }
+
+  const closeContexts = () => {
+    setEditing(false)
     opener.current?.focus()
   }
 
@@ -104,11 +118,21 @@ export function SessionBar({
         >
           {file === null ? 'Untitled' : basename(file)}
         </button>
-        {analysis && (
-          <span className="bar__window mono" title="The window nodes are evaluated over">
-            {String(analysis.start)} → {String(analysis.stop)}
-          </span>
-        )}
+        {/* The window runs are over, and the way to change it and the other
+            contexts: the thing that names it is the thing that edits it. */}
+        <button
+          type="button"
+          className={`bar__window quiet mono${analysis ? '' : ' bar__window--none'}`}
+          title="The window nodes are evaluated over"
+          aria-label="Edit contexts"
+          aria-expanded={editing}
+          data-testid="session-window"
+          onClick={(e) => openContexts(e.currentTarget)}
+        >
+          {analysis
+            ? `${String(analysis.start)} → ${String(analysis.stop)}`
+            : 'Set the analysis window'}
+        </button>
 
         <div className="bar__actions">
           <button
@@ -189,6 +213,7 @@ export function SessionBar({
 
       {/* Outside the header, not inside it: the picker's scrim has to dim the
           bar it hangs off, and nothing can dim its own ancestor. */}
+      {editing && <Contexts store={store} onClose={closeContexts} />}
       {picking !== null && (
         <FilePicker
           mode={picking}

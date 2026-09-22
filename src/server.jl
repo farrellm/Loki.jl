@@ -520,12 +520,27 @@ function buildrouter(srv::Server)
         "PUT",
         "/api/contexts/{name}",
         function (req)
-            name = HTTP.getparams(req)["name"]
-            setcontext!(s, String(name), readcontext(JSON3.read(String(req.body))))
+            name = contextparam(req)
+            setcontext!(s, name, readcontext(JSON3.read(String(req.body))))
             jsonresponse(
                 Dict("name" => String(name),
-                    "context" => contextevent(s.contexts[String(name)])),
+                    "context" => contextevent(s.contexts[name])),
             )
+        end,
+    )
+
+    HTTP.register!(
+        r,
+        "DELETE",
+        "/api/contexts/{name}",
+        function (req)
+            name = contextparam(req)
+            lock(s.lock) do
+                name == "analysis" || haskey(s.contexts, name) ||
+                    throw(NotFound("no context $(repr(name))"))
+            end
+            removecontext!(s, name)
+            jsonresponse(Dict("ok" => true))
         end,
     )
 
@@ -674,6 +689,9 @@ function buildrouter(srv::Server)
 end
 
 contextname(req::HTTP.Request) = String(get(query(req), "context", "analysis"))
+
+# A context's name from the path, where a name outside ASCII arrives escaped.
+contextparam(req::HTTP.Request) = HTTP.URIs.unescapeuri(String(HTTP.getparams(req)["name"]))
 
 # One directory on the machine Loki is running on, for the browser's file
 # picker. Not rooted anywhere: an analysis reads from one directory and saves to

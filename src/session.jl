@@ -143,6 +143,29 @@ function setcontext!(s::Session, name::AbstractString, ctx::Context)
 end
 
 """
+    Loki.removecontext!(s::Session, name) -> Session
+
+Remove the named context `name`. `analysis` cannot be removed — it is the window
+runs are over — only changed with [`Loki.setcontext!`](@ref). Nothing is
+invalidated: results are cached by a context's value, not its name, and a node
+whose parameters still name `name` fails when it is next built.
+"""
+function removecontext!(s::Session, name::AbstractString)
+    lock(s.lock) do
+        name == "analysis" && throw(
+            ArgumentError(
+                "the session always has an analysis context; change it rather than removing it",
+            ),
+        )
+        haskey(s.contexts, name) ||
+            throw(ArgumentError("the session has no context $(repr(String(name)))"))
+        delete!(s.contexts, String(name))
+        graphchanged!(s, "removecontext"; name = String(name))
+    end
+    return s
+end
+
+"""
     Loki.addtable!(s::Session, name, table) -> Session
 
 Hold `table` — any Tables.jl table, or a loaded `CausalFrame` — under `name`, for
