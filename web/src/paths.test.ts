@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   basename,
+  folderOf,
   formatModified,
   joinPath,
   matchesSuffix,
@@ -83,5 +84,20 @@ describe('formatModified', () => {
   it('shows nothing for a directory, which has no time', () => {
     expect(formatModified(undefined, now)).toBe('')
     expect(formatModified('not a date', now)).toBe('')
+  })
+})
+
+describe('folderOf', () => {
+  it('is the folder of an absolute path, and the root for a file at the root', () => {
+    expect(folderOf('/home/farrellm/data/prices.csv')).toBe('/home/farrellm/data')
+    expect(folderOf('/prices.csv')).toBe('/')
+  })
+
+  it('keeps a relative folder relative, for the server to resolve', () => {
+    expect(folderOf('data/prices.csv')).toBe('data')
+  })
+
+  it('has no folder for a bare name, rather than claiming the root', () => {
+    expect(folderOf('prices.csv')).toBeUndefined()
   })
 })

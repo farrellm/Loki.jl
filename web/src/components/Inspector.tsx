@@ -15,7 +15,7 @@ export function Inspector({ store }: { store: SessionStore }) {
 
   const fieldContext: FieldContext = useMemo(() => {
     if (graph === null || node === null) {
-      return { columns: [], contexts: [], tables: [] }
+      return { columns: [], contexts: [], tables: [], write: false }
     }
     // Column pickers are fed by the last evaluated schema of the node's input —
     // CausalFrames schemas are data-driven, so there is nothing to offer until
@@ -38,6 +38,7 @@ export function Inspector({ store }: { store: SessionStore }) {
       columns: [...columns],
       contexts: Object.keys(graph.contexts),
       tables: graph.tables.map((t) => t.name),
+      write: node.write,
     }
   }, [graph, node])
 

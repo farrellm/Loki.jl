@@ -100,8 +100,10 @@ export interface ParamSchema {
   required?: string[]
   description?: string
   default?: unknown
-  /** Loki's own vocabulary: column, columns, code, context, table, summarizers. */
+  /** Loki's own vocabulary: column, columns, code, context, table, summarizers, path. */
   'x-loki'?: string
+  /** For a path: the files the picker offers. */
+  'x-loki-suffixes'?: string[]
 }
 
 export interface NodeKind {

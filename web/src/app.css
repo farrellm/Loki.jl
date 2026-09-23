@@ -625,6 +625,45 @@
   overflow: hidden;
 }
 
+/* A file path: the path itself is the button, read as the picker reads it —
+ * the file is the subject, and its folder the quiet line above, cut from the
+ * left so the nearest folder is the one still showing. The name is never cut.
+ */
+.pathfield {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--paper);
+  font-family: var(--mono);
+  text-align: left;
+}
+
+.pathfield__folder {
+  overflow: hidden;
+  /* The line runs right to left so it overflows, and takes its ellipsis, at the
+     root end; the path inside it still reads left to right. */
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-xs);
+  color: var(--ink-quiet);
+}
+
+.pathfield__name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* An instruction, not a path, so it is set in the interface face. */
+.pathfield__none {
+  font-family: var(--ui);
+  color: var(--ink-quiet);
+}
+
 .summarizers {
   display: flex;
   flex-direction: column;
@@ -971,6 +1010,16 @@
   background: var(--panel);
 }
 
+/* Opened from the inspector, the band hangs from the other end of the bar,
+ * over the column the field was in.
+ */
+.picker--end {
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid var(--rule);
+}
+
 .picker__head,
 .contexts__head {
   display: flex;
@@ -1121,6 +1170,7 @@
 .app--narrow .contexts {
   width: 100%;
   border-right: none;
+  border-left: none;
 }
 
 .app--narrow .picker__entry {
