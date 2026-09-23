@@ -741,9 +741,10 @@ A single-page app written in TypeScript with Vite and React:
   field's own — never typed, and stepped over rather than deleted; a DateTime
   typed on past its seconds takes milliseconds — and one calendar under the
   pair sets whichever end was focused last, drawing the window across its days
-  with the timeline's line and ticks; typing a date moves it to that month.
-  Removing takes a second tap and first says which nodes still name the
-  context; `analysis` has no remove.
+  with the timeline's line and ticks; typing a date moves it to that month. A
+  DateTime's time is typed: a picked day keeps the time its end has, or takes
+  midnight. Removing takes a second tap and first says which nodes still name
+  the context; `analysis` has no remove.
 - **File picker** — a path on the machine Loki is running on, over
   `/api/files`. A band hanging off the session bar rather than a floating
   dialog, with the path as its subject: one line that is at once the

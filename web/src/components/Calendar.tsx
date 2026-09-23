@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { parseTime } from '../contexts'
 import { addDays, addMonths, iso, monthGrid, MONTHS, viewOf, type Month } from '../dates'
 
-// The calendar under a `Date` context's start and stop. One month, and across
-// it the window drawn the way the timeline above draws it — a line with a tick
-// at each end — under the dates rather than through them, so how long the
-// window is and where it stops are seen along with the day being picked.
+// The calendar under a `Date` or `DateTime` context's start and stop. One
+// month, and across it the window drawn the way the timeline above draws it — a
+// line with a tick at each end — under the dates rather than through them, so
+// how long the window is and where it stops are seen along with the day being
+// picked. A DateTime's time is typed; the calendar picks its day.
 //
 // It is one calendar for both ends: a day sets whichever end is active, which
 // is the field last focused. Typing a date moves it to that month, so years
@@ -27,11 +28,14 @@ const monthOf = (day: string): Month => {
 }
 
 export function Calendar({
+  timetype,
   start,
   stop,
   end,
   onPick,
 }: {
+  /** `Date` or `DateTime`: either way it is the day that is picked. */
+  timetype: string
   /** The two ends as typed, which may be partial. */
   start: string
   stop: string
@@ -71,10 +75,13 @@ export function Calendar({
     grid.current?.querySelector<HTMLElement>(`[data-day="${cursor}"]`)?.focus()
   }, [cursor, view])
 
-  const s = parseTime('Date', start) === null ? null : start.trim()
-  const t = parseTime('Date', stop) === null ? null : stop.trim()
+  // The day an end falls on, once it parses; a DateTime is drawn by its date.
+  const dayOf = (text: string) =>
+    parseTime(timetype, text) === null ? null : text.trim().slice(0, 10)
+  const s = dayOf(start)
+  const t = dayOf(stop)
   const span = s !== null && t !== null && s <= t ? { s, t } : null
-  const chosen = parseTime('Date', active) === null ? null : active.trim()
+  const chosen = dayOf(active)
 
   const inView = (day: string | null) => {
     if (day === null) return false

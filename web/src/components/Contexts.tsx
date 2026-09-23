@@ -330,14 +330,20 @@ export function Contexts({
         </div>
 
         {/* Picking the start hands the calendar to the stop, without moving
-            focus there: on a phone that would open a keyboard nobody asked for. */}
-        {draft.timetype === 'Date' && (
+            focus there: on a phone that would open a keyboard nobody asked for.
+            A DateTime keeps the time its end already has, even half typed. */}
+        {mask !== null && (
           <Calendar
+            timetype={draft.timetype}
             start={draft.start}
             stop={draft.stop}
             end={end}
             onPick={(day) => {
-              edit(end === 'start' ? { start: day } : { stop: day })
+              const time =
+                draft.timetype === 'DateTime'
+                  ? draft[end].trim().slice(10) || 'T00:00:00'
+                  : ''
+              edit(end === 'start' ? { start: day + time } : { stop: day + time })
               if (end === 'start') setEnd('stop')
             }}
           />
