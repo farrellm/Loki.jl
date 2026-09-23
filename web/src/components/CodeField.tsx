@@ -2,11 +2,24 @@ import { useEffect, useRef } from 'react'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, placeholder } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { StreamLanguage } from '@codemirror/language'
+import { HighlightStyle, StreamLanguage, syntaxHighlighting } from '@codemirror/language'
 import { julia } from '@codemirror/legacy-modes/mode/julia'
+import { tags } from '@lezer/highlight'
 
 // CodeMirror 6, not Monaco: Monaco does not support mobile browsers, and an
 // expression parameter has to be editable on a phone like everything else.
+
+// The legacy Julia mode's token names, mapped onto the theme's editor-only
+// `--code-*` tokens; a comment or an error reuses the colour that already means it.
+const juliaHighlight = HighlightStyle.define([
+  { tag: tags.keyword, color: 'var(--code-keyword)' },
+  { tag: tags.string, color: 'var(--code-string)' },
+  { tag: tags.number, color: 'var(--code-number)' },
+  { tag: [tags.standard(tags.variableName), tags.meta], color: 'var(--code-builtin)' },
+  { tag: tags.definition(tags.variableName), fontWeight: '600' },
+  { tag: tags.comment, color: 'var(--ink-faint)', fontStyle: 'italic' },
+  { tag: tags.invalid, color: 'var(--alarm)' },
+])
 
 export function CodeField({
   value,
@@ -40,6 +53,7 @@ export function CodeField({
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           StreamLanguage.define(julia),
+          syntaxHighlighting(juliaHighlight),
           placeholder(hint ?? ''),
           EditorView.lineWrapping,
           EditorView.theme({

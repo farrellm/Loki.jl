@@ -713,7 +713,8 @@ A single-page app written in TypeScript with Vite and React:
 - **Canvas** — React Flow. Nodes show their kind, status (idle, running, ok,
   error, blocked), row count, and acausal badge or shading.
 - **Inspector** — a form generated from the node kind's `paramschema`, a
-  CodeMirror 6 editor for expression parameters, context pickers, column pickers fed by
+  CodeMirror 6 editor for expression parameters (Julia highlighted in the
+  theme's editor-only `--code-*` colours), context pickers, column pickers fed by
   the input schema, and a file node's `path` as a button that reads the path —
   the file name, under its folder cut from the left — and opens the file
   picker.

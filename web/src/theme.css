@@ -8,6 +8,11 @@
  * Acausality is deliberately NOT carried by colour alone. It is a 45° hatch —
  * the convention a fan chart uses for the part you do not know yet — so it
  * survives greyscale, colour blindness, and a phone screen in sunlight.
+ *
+ * The `--code-*` tokens are the one exception, and they stay inside the code
+ * editor: there they mean Julia syntax and nothing else, so they are chosen
+ * away from the functional hues rather than borrowed from them. Comments and
+ * error tokens reuse `--ink-faint` and `--alarm`, which already mean that.
  */
 
 :root {
@@ -20,6 +25,11 @@
   --signal: #1d6b57;
   --alarm: #a93a2e;
   --ahead: #6e5aa3;
+
+  --code-keyword: #2c5a8c;
+  --code-string: #85591a;
+  --code-number: #8f4a6d;
+  --code-builtin: #52697a;
 
   --ink-quiet: color-mix(in srgb, var(--ink) 62%, var(--paper));
   --ink-faint: color-mix(in srgb, var(--ink) 40%, var(--paper));
@@ -65,6 +75,10 @@
     --signal: #4fb899;
     --alarm: #e0705f;
     --ahead: #a290d6;
+    --code-keyword: #7fa9d8;
+    --code-string: #d2a55f;
+    --code-number: #d68fb0;
+    --code-builtin: #9fb1bd;
     --scrim: rgb(0 0 0 / 0.55);
   }
 }
@@ -77,6 +91,10 @@
   --signal: #4fb899;
   --alarm: #e0705f;
   --ahead: #a290d6;
+  --code-keyword: #7fa9d8;
+  --code-string: #d2a55f;
+  --code-number: #d68fb0;
+  --code-builtin: #9fb1bd;
   --scrim: rgb(0 0 0 / 0.55);
 }
 
