@@ -1,8 +1,19 @@
 import { useEffect, useRef } from 'react'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, placeholder } from '@codemirror/view'
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { HighlightStyle, StreamLanguage, syntaxHighlighting } from '@codemirror/language'
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from '@codemirror/commands'
+import {
+  HighlightStyle,
+  StreamLanguage,
+  indentOnInput,
+  indentUnit,
+  syntaxHighlighting,
+} from '@codemirror/language'
 import { julia } from '@codemirror/legacy-modes/mode/julia'
 import { tags } from '@lezer/highlight'
 
@@ -51,8 +62,15 @@ export function CodeField({
         extensions: [
           lineNumbers(),
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
+          // Tab indents rather than moving focus, as in any code editor; Escape
+          // then Tab still leaves the field, so the keyboard is never trapped.
+          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           StreamLanguage.define(julia),
+          // Enter indents to the open blocks, four spaces a level as Julia does,
+          // and `end`, `else`, `catch` and `finally` dedent as they are typed
+          // (the mode's own list: `elseif` is not on it, so Shift-Tab it).
+          indentUnit.of('    '),
+          indentOnInput(),
           syntaxHighlighting(juliaHighlight),
           placeholder(hint ?? ''),
           EditorView.lineWrapping,

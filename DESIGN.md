@@ -714,7 +714,8 @@ A single-page app written in TypeScript with Vite and React:
   error, blocked), row count, and acausal badge or shading.
 - **Inspector** — a form generated from the node kind's `paramschema`, a
   CodeMirror 6 editor for expression parameters (Julia highlighted in the
-  theme's editor-only `--code-*` colours), context pickers, column pickers fed by
+  theme's editor-only `--code-*` colours and indented as it is typed — Tab
+  indents, Escape then Tab leaves the field), context pickers, column pickers fed by
   the input schema, and a file node's `path` as a button that reads the path —
   the file name, under its folder cut from the left — and opens the file
   picker.
