@@ -28,6 +28,18 @@ export function parentOf(path: string): string {
   return cut <= 0 ? '/' : trimmed.slice(0, cut)
 }
 
+/**
+ * The folder a path names its file in, or `undefined` for a bare file name —
+ * which leaves the server to start in its own working directory, as it would
+ * read the file from there. A relative folder goes to the server as it is.
+ */
+export function folderOf(path: string): string | undefined {
+  const trimmed = path.replace(/\/+$/, '')
+  const cut = trimmed.lastIndexOf('/')
+  if (cut < 0) return undefined
+  return cut === 0 ? '/' : trimmed.slice(0, cut)
+}
+
 export function basename(path: string): string {
   const trimmed = path.replace(/\/+$/, '')
   return trimmed.slice(trimmed.lastIndexOf('/') + 1)

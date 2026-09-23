@@ -30,8 +30,10 @@ import type { FileEntry, FileListing } from '../types'
 // pasted from a terminal gets in.
 //
 // Nothing here knows about sessions: it takes suffixes, a folder and a name and
-// hands back a path, which is the whole contract for reusing it on a `readcsv`
-// node's path parameter.
+// hands back a path, which is the whole contract — the session bar opens and
+// saves with it, and a file node's `path` parameter is chosen with it. It hangs
+// from the side it was opened from: the bar's own band from the left, the
+// inspector's from the right, over the column the field was in.
 
 export function FilePicker({
   mode,
@@ -40,6 +42,7 @@ export function FilePicker({
   suffixes,
   start,
   name: initialName = '',
+  side = 'start',
   onChoose,
   onCancel,
 }: {
@@ -50,6 +53,7 @@ export function FilePicker({
   suffixes?: string[]
   start?: string
   name?: string
+  side?: 'start' | 'end'
   onChoose: (path: string) => void
   onCancel: () => void
 }) {
@@ -145,7 +149,7 @@ export function FilePicker({
     <>
       <div className="scrim" onClick={onCancel} aria-hidden="true" />
       <div
-        className="picker"
+        className={side === 'end' ? 'picker picker--end' : 'picker'}
         role="dialog"
         aria-modal="true"
         aria-label={title}

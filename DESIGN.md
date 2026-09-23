@@ -121,8 +121,10 @@ Most kinds are an `OpKind`: data — a name, a palette category, ports, a list o
 `paramschema` and `validateparams` are derived. A `Param`'s type is JSON's
 (`string`, `integer`, `number`, `boolean`, `enum`, `integers`) or Loki's own —
 `column`, `columns`, `code` (source text), `context`, `table` (names in the
-session) and `summarizers` — carried in the schema as an `x-loki` annotation
-the inspector keys its column pickers and code editors on. Parameter values
+session), `summarizers` and `path` (a file on the machine Loki runs on, with
+the suffixes the file picker offers in `x-loki-suffixes`) — carried in the
+schema as an `x-loki` annotation the inspector keys its column pickers, code
+editors and file picker on. Parameter values
 stay JSON-like, so a graph saves and travels as data.
 
 `build` calls the real operator constructors, so a bad parameter is reported
@@ -711,8 +713,10 @@ A single-page app written in TypeScript with Vite and React:
 - **Canvas** — React Flow. Nodes show their kind, status (idle, running, ok,
   error, blocked), row count, and acausal badge or shading.
 - **Inspector** — a form generated from the node kind's `paramschema`, a
-  CodeMirror 6 editor for expression parameters, context pickers, and column pickers fed by
-  the input schema.
+  CodeMirror 6 editor for expression parameters, context pickers, column pickers fed by
+  the input schema, and a file node's `path` as a button that reads the path —
+  the file name, under its folder cut from the left — and opens the file
+  picker.
 - **Diagnostics** — tabs per watched port, rendered with Plotly.js from the
   server's plot-ready data.
 - **Table** — a paged preview of a node's output.
@@ -738,8 +742,10 @@ A single-page app written in TypeScript with Vite and React:
   breadcrumb, the file name field and the string that will be written. Files it
   cannot use are dimmed rather than filtered away, because a folder filtered
   down to nothing cannot say whether it is the right folder. It takes suffixes,
-  a folder and a name and returns a path, so a `readcsv` node's path parameter
-  can use the same component.
+  a folder and a name and returns a path, so the file nodes' `path` uses the
+  same component: a read node opens it to choose a file, a write node to save
+  one, and the path is stored as picked. It hangs from the side it was opened
+  from — the left from the session bar, the right from the inspector.
 
 The bundle is built into `assets/web`, which is **not** in version control:
 `web/` holds the sources, and `cd web && npm ci && npm run build` produces it. A
@@ -861,8 +867,8 @@ or the cookie.
 | `GET` / `PUT` / `POST` | `/api/session` | the current file, save, open |
 
 `/api/files` lists one directory — its subdirectories and files, with each
-file's modified time — so the browser can pick a path to save to or open, and
-later a path for `readcsv`. It is deliberately **not rooted**: an analysis reads
+file's modified time — so the browser can pick a session to save to or open,
+and the file a read or write node names. It is deliberately **not rooted**: an analysis reads
 its data from one directory and saves beside it in another, and a session that
 evaluates source text can already reach the whole filesystem (see "User code"),
 so a root would be a configuration burden rather than a boundary. The token,

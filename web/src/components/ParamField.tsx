@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CodeField } from './CodeField'
+import { PathField } from './PathField'
 import type { ParamSchema } from '../types'
 
 // A parameter edit is a graph edit: it invalidates the node and everything
@@ -47,6 +48,8 @@ export interface FieldContext {
   columns: string[]
   contexts: string[]
   tables: string[]
+  /** Whether the node writes a file, which makes its `path` somewhere to save. */
+  write: boolean
 }
 
 export function ParamField({
@@ -116,6 +119,19 @@ function Control({
         value={blank ? '' : String(value)}
         hint="Julia, evaluated in the session's module"
         onCommit={(text) => onChange(text.trim() === '' ? null : text)}
+      />
+    )
+  }
+
+  if (loki === 'path') {
+    return (
+      <PathField
+        id={id}
+        name={name}
+        value={blank ? '' : String(value)}
+        write={context.write}
+        suffixes={schema['x-loki-suffixes']}
+        onChange={onChange}
       />
     )
   }

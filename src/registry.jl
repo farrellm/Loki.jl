@@ -30,11 +30,11 @@ Port(name::Symbol; variadic::Bool = false, optional::Bool = false) =
     Port(name, variadic, optional)
 
 const PARAMTYPES = (:string, :integer, :number, :boolean, :enum, :integers, :column,
-    :columns, :code, :context, :table, :summarizers)
+    :columns, :code, :context, :table, :summarizers, :path)
 
 """
     Loki.Param(name, type::Symbol; required = false, default = nothing,
-               description = "", choices = String[])
+               description = "", choices = String[], suffixes = String[])
 
 A node kind's parameter. Parameter values are JSON-like, so a graph saves and
 travels as data; `type` is one of:
@@ -50,6 +50,7 @@ travels as data; `type` is one of:
 | `:context` | the name of a session context |
 | `:table` | the name of a session table |
 | `:summarizers` | a vector of `{"summarizer", "columns", "options"}` dictionaries |
+| `:path` | a file path on the machine Loki runs on; `suffixes` names the files the browser's picker offers |
 
 An unset optional parameter takes `default`.
 """
@@ -60,15 +61,19 @@ struct Param
     default::Any
     description::String
     choices::Vector{String}
+    suffixes::Vector{String}
 end
 
 function Param(name::AbstractString, type::Symbol; required::Bool = false,
-    default = nothing, description::AbstractString = "", choices = String[])
+    default = nothing, description::AbstractString = "", choices = String[],
+    suffixes = String[])
     type in PARAMTYPES || throw(ArgumentError("unknown parameter type $(repr(type))"))
     type === :enum && isempty(choices) &&
         throw(ArgumentError("enum parameter $name needs choices"))
+    type === :path || isempty(suffixes) ||
+        throw(ArgumentError("only a path parameter takes suffixes, and $name is $type"))
     return Param(String(name), type, required, default, String(description),
-        collect(String, choices))
+        collect(String, choices), collect(String, suffixes))
 end
 
 """
@@ -274,7 +279,7 @@ isinteger_(v) = v isa Integer && !(v isa Bool)
 
 function paramok(spec::Param, v)
     t = spec.type
-    t in (:string, :column, :context, :table) && return v isa AbstractString
+    t in (:string, :path, :column, :context, :table) && return v isa AbstractString
     t === :enum && return v isa AbstractString && v in spec.choices
     t === :integer && return isinteger_(v)
     t === :number && return v isa Real && !(v isa Bool)
@@ -293,6 +298,7 @@ function describeparam(spec::Param)
     t === :columns && return "a column name or a vector of them"
     t === :code && return "Julia source text"
     t === :summarizers && return "a vector of summarizer entries"
+    t === :path && return "a file path"
     t in (:column, :context, :table) && return "the name of a $t"
     return "a$(t === :integer ? "n" : "") $t"
 end
@@ -322,7 +328,12 @@ function jsonschema(spec::Param)
         return Dict{String,Any}("type" => "array",
             "items" => Dict{String,Any}("type" => "integer"))
     # Loki's own vocabulary rides in "x-loki": column pickers, code editors,
-    # context and table pickers, the summarizer list editor.
+    # context and table pickers, the file picker, the summarizer list editor.
+    if t === :path
+        s = Dict{String,Any}("type" => "string", "x-loki" => "path")
+        isempty(spec.suffixes) || (s["x-loki-suffixes"] = spec.suffixes)
+        return s
+    end
     t in (:column, :context, :table) &&
         return Dict{String,Any}("type" => "string", "x-loki" => String(t))
     t === :code &&
