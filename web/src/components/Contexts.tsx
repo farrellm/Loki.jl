@@ -4,6 +4,7 @@ import {
   check,
   defaultTimetype,
   extent,
+  convert,
   ordered,
   PLACEHOLDERS,
   span,
@@ -12,8 +13,11 @@ import {
   type Draft,
   type TimeType,
 } from '../contexts'
+import { maskFor } from '../dates'
 import { trapTab } from '../focus'
 import type { SessionStore } from '../store'
+import { Calendar } from './Calendar'
+import { DateField } from './DateField'
 
 // The named contexts: the windows of time a node can be evaluated over.
 //
@@ -62,6 +66,8 @@ export function Contexts({
   const [problem, setProblem] = useState<string | null>(null)
   const [removing, setRemoving] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Which end of a `Date` window the calendar sets: the field last focused.
+  const [end, setEnd] = useState<'start' | 'stop'>('start')
 
   // The context being edited can vanish under us — the agent removed it, or
   // the session was opened from a file.
@@ -81,6 +87,7 @@ export function Contexts({
     setTouched(false)
     setProblem(null)
     setRemoving(false)
+    setEnd('start')
     if (next === null) return
     if (next.fresh) return setDraft(blank())
     const ctx = contexts[next.name]
@@ -212,6 +219,10 @@ export function Contexts({
     const shown = problem ?? (touched && !checked.ok ? checked.problem : null)
     const [startHint, stopHint] = PLACEHOLDERS[draft.timetype as TimeType] ?? ['', '']
     const numeric = draft.timetype === 'Int64' || draft.timetype === 'Float64'
+    const mask = maskFor(draft.timetype)
+    // A DateTime is 19 characters: on a phone each end takes the whole line,
+    // since a field that scrolled would slide out from over its skeleton.
+    const endClass = `contexts__field${draft.timetype === 'DateTime' ? ' contexts__field--wide' : ''}`
     return (
       <form
         className="contexts__form"
@@ -242,7 +253,15 @@ export function Contexts({
             <select
               value={draft.timetype}
               data-testid="context-timetype"
-              onChange={(e) => edit({ timetype: e.target.value })}
+              onChange={(e) => {
+                const from = draft.timetype
+                const to = e.target.value
+                edit({
+                  timetype: to,
+                  start: convert(from, to, draft.start),
+                  stop: convert(from, to, draft.stop),
+                })
+              }}
             >
               {TIMETYPES.map((t) => (
                 <option key={t} value={t}>
@@ -256,36 +275,79 @@ export function Contexts({
               )}
             </select>
           </label>
-          <label className="contexts__field">
+          <label className={endClass}>
             <span>Start</span>
-            <input
-              className="mono"
-              value={draft.start}
-              placeholder={startHint}
-              inputMode={numeric ? 'decimal' : 'text'}
-              autoFocus={!fresh}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              data-testid="context-start"
-              onChange={(e) => edit({ start: e.target.value })}
-            />
+            {mask !== null ? (
+              <DateField
+                mask={mask}
+                value={draft.start}
+                active={end === 'start'}
+                autoFocus={!fresh}
+                testid="context-start"
+                onFocus={() => setEnd('start')}
+                onChange={(start) => edit({ start })}
+              />
+            ) : (
+              <input
+                className="mono"
+                value={draft.start}
+                placeholder={startHint}
+                inputMode={numeric ? 'decimal' : 'text'}
+                autoFocus={!fresh}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                data-testid="context-start"
+                onChange={(e) => edit({ start: e.target.value })}
+              />
+            )}
           </label>
-          <label className="contexts__field">
+          <label className={endClass}>
             <span>Stop</span>
-            <input
-              className="mono"
-              value={draft.stop}
-              placeholder={stopHint}
-              inputMode={numeric ? 'decimal' : 'text'}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              data-testid="context-stop"
-              onChange={(e) => edit({ stop: e.target.value })}
-            />
+            {mask !== null ? (
+              <DateField
+                mask={mask}
+                value={draft.stop}
+                active={end === 'stop'}
+                testid="context-stop"
+                onFocus={() => setEnd('stop')}
+                onChange={(stop) => edit({ stop })}
+              />
+            ) : (
+              <input
+                className="mono"
+                value={draft.stop}
+                placeholder={stopHint}
+                inputMode={numeric ? 'decimal' : 'text'}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                data-testid="context-stop"
+                onChange={(e) => edit({ stop: e.target.value })}
+              />
+            )}
           </label>
         </div>
+
+        {/* Picking the start hands the calendar to the stop, without moving
+            focus there: on a phone that would open a keyboard nobody asked for.
+            A DateTime keeps the time its end already has, even half typed. */}
+        {mask !== null && (
+          <Calendar
+            timetype={draft.timetype}
+            start={draft.start}
+            stop={draft.stop}
+            end={end}
+            onPick={(day) => {
+              const time =
+                draft.timetype === 'DateTime'
+                  ? draft[end].trim().slice(10) || 'T00:00:00'
+                  : ''
+              edit(end === 'start' ? { start: day + time } : { stop: day + time })
+              if (end === 'start') setEnd('stop')
+            }}
+          />
+        )}
 
         {shown !== null && (
           <p className="contexts__problem" role="alert" data-testid="context-problem">

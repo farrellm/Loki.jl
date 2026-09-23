@@ -75,6 +75,21 @@ function utc(
     : null
 }
 
+/**
+ * One end of a draft as it reads in another time type. Between `Date` and
+ * `DateTime` it is carried over — midnight added, or the time dropped — and a
+ * partly typed date, which is the start of either, is kept as it is. Anything
+ * else is kept if it still parses and cleared if not: `401` is no start for a
+ * Date.
+ */
+export function convert(from: string, to: string, text: string): string {
+  if (from === 'Date' && to === 'DateTime') {
+    return parseTime('Date', text) === null ? text : `${text.trim()}T00:00:00`
+  }
+  if (from === 'DateTime' && to === 'Date') return text.trim().slice(0, 10)
+  return parseTime(to, text) === null ? '' : text
+}
+
 /** Where a context the server sent falls on an axis, if its type has one. */
 export function span(ctx: ContextSpec): [number, number] | null {
   const start = parseTime(ctx.timetype, String(ctx.start))

@@ -1459,6 +1459,181 @@
   min-height: var(--tap);
 }
 
+/* --- the date field and calendar ---------------------------------------- */
+
+/* A `Date` end is typed as digits over its own skeleton. The input is clear and
+ * the wrapper carries its ground, so the rest of `YYYY-MM-DD` shows through,
+ * faint, exactly where the next digits will land.
+ */
+.datefield {
+  position: relative;
+  display: block;
+  border-radius: 3px;
+  background: var(--paper);
+}
+
+.datefield input {
+  position: relative;
+  background: transparent;
+}
+
+.datefield__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  /* The input's border and padding, so each character sits under its slot. */
+  padding: 0 9px;
+  font-size: var(--t-s);
+  white-space: pre;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+.datefield__typed {
+  visibility: hidden;
+}
+
+/* The end the calendar sets. */
+.datefield--active input {
+  border-color: var(--signal);
+}
+
+.app--narrow .datefield__skeleton {
+  font-size: 16px;
+}
+
+/* Hung from the right, under the start and stop it sets, which are the last
+ * fields in the row at every width that has more than two.
+ */
+.calendar {
+  max-width: 21rem;
+  margin: 10px 0 0 auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--rule);
+}
+
+.calendar__head {
+  display: flex;
+  align-items: center;
+}
+
+.calendar__head button {
+  min-width: var(--control);
+  padding: 0;
+  font-size: var(--t-m);
+  color: var(--ink-quiet);
+}
+
+.calendar__month {
+  flex: 1;
+  font-size: var(--t-s);
+  color: var(--ink);
+  text-align: center;
+}
+
+.calendar__grid {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.calendar__grid th {
+  padding: 4px 0 2px;
+  font-size: var(--t-xs);
+  font-weight: 400;
+  color: var(--ink-quiet);
+}
+
+.calendar__grid td {
+  padding: 0;
+}
+
+/* A day: its number above, and below it room for the window's line, which
+ * runs on through the cells unbroken, week after week.
+ */
+.calendar__day {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 38px;
+  min-height: 0;
+  padding: 0 0 14px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar__day:focus-visible {
+  outline-offset: -2px;
+}
+
+.calendar__day::before,
+.calendar__day::after {
+  content: '';
+  position: absolute;
+  display: none;
+  color: var(--ink);
+}
+
+/* The line, at the height of the timeline's. */
+.calendar__day::after {
+  left: 0;
+  right: 0;
+  bottom: 7px;
+  border-top: 2px solid currentColor;
+}
+
+/* The ticks at the ends, standing across the line. */
+.calendar__day::before {
+  left: calc(50% - 1px);
+  bottom: 2px;
+  height: 12px;
+  border-left: 2px solid currentColor;
+}
+
+.calendar__day--in::after,
+.calendar__day--run::after,
+.calendar__day--start::before,
+.calendar__day--stop::before {
+  display: block;
+}
+
+.calendar__day--start.calendar__day--run::after {
+  left: 50%;
+}
+
+.calendar__day--stop.calendar__day--run::after {
+  right: 50%;
+}
+
+/* The day the active end is set to: its number and its tick in signal. */
+.calendar__day--active {
+  color: var(--signal);
+  font-weight: 600;
+}
+
+.calendar__day--active::before {
+  color: var(--signal);
+}
+
+.app--narrow .calendar {
+  max-width: none;
+  margin-left: 0;
+}
+
+.app--narrow .calendar__head button {
+  min-width: var(--tap);
+  min-height: var(--tap);
+}
+
+.app--narrow .calendar__day {
+  height: var(--tap);
+  font-size: var(--t-m);
+}
+
 /* --- notices -------------------------------------------------------------- */
 
 .notices {

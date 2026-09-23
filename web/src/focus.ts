@@ -5,7 +5,7 @@ export function trapTab(e: React.KeyboardEvent, band: HTMLElement | null) {
   if (band === null) return
   const focusable = [
     ...band.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), input:not(:disabled), select:not(:disabled)',
+      'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled), select:not(:disabled)',
     ),
   ]
   if (focusable.length === 0) return
