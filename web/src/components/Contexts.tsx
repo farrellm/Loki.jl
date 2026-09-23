@@ -5,6 +5,7 @@ import {
   defaultTimetype,
   extent,
   ordered,
+  parseTime,
   PLACEHOLDERS,
   span,
   TIMETYPES,
@@ -14,6 +15,7 @@ import {
 } from '../contexts'
 import { trapTab } from '../focus'
 import type { SessionStore } from '../store'
+import { DateField } from './DateField'
 
 // The named contexts: the windows of time a node can be evaluated over.
 //
@@ -212,6 +214,7 @@ export function Contexts({
     const shown = problem ?? (touched && !checked.ok ? checked.problem : null)
     const [startHint, stopHint] = PLACEHOLDERS[draft.timetype as TimeType] ?? ['', '']
     const numeric = draft.timetype === 'Int64' || draft.timetype === 'Float64'
+    const date = draft.timetype === 'Date'
     return (
       <form
         className="contexts__form"
@@ -242,7 +245,14 @@ export function Contexts({
             <select
               value={draft.timetype}
               data-testid="context-timetype"
-              onChange={(e) => edit({ timetype: e.target.value })}
+              onChange={(e) => {
+                // An end that means nothing in the new type is cleared rather
+                // than carried over: `401` is no start for a Date.
+                const timetype = e.target.value
+                const keep = (text: string) =>
+                  parseTime(timetype, text) === null ? '' : text
+                edit({ timetype, start: keep(draft.start), stop: keep(draft.stop) })
+              }}
             >
               {TIMETYPES.map((t) => (
                 <option key={t} value={t}>
@@ -258,32 +268,49 @@ export function Contexts({
           </label>
           <label className="contexts__field">
             <span>Start</span>
-            <input
-              className="mono"
-              value={draft.start}
-              placeholder={startHint}
-              inputMode={numeric ? 'decimal' : 'text'}
-              autoFocus={!fresh}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              data-testid="context-start"
-              onChange={(e) => edit({ start: e.target.value })}
-            />
+            {date ? (
+              <DateField
+                value={draft.start}
+                autoFocus={!fresh}
+                testid="context-start"
+                onChange={(start) => edit({ start })}
+              />
+            ) : (
+              <input
+                className="mono"
+                value={draft.start}
+                placeholder={startHint}
+                inputMode={numeric ? 'decimal' : 'text'}
+                autoFocus={!fresh}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                data-testid="context-start"
+                onChange={(e) => edit({ start: e.target.value })}
+              />
+            )}
           </label>
           <label className="contexts__field">
             <span>Stop</span>
-            <input
-              className="mono"
-              value={draft.stop}
-              placeholder={stopHint}
-              inputMode={numeric ? 'decimal' : 'text'}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              data-testid="context-stop"
-              onChange={(e) => edit({ stop: e.target.value })}
-            />
+            {date ? (
+              <DateField
+                value={draft.stop}
+                testid="context-stop"
+                onChange={(stop) => edit({ stop })}
+              />
+            ) : (
+              <input
+                className="mono"
+                value={draft.stop}
+                placeholder={stopHint}
+                inputMode={numeric ? 'decimal' : 'text'}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                data-testid="context-stop"
+                onChange={(e) => edit({ stop: e.target.value })}
+              />
+            )}
           </label>
         </div>
 

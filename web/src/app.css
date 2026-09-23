@@ -1459,6 +1459,45 @@
   min-height: var(--tap);
 }
 
+/* --- the date field ------------------------------------------------------ */
+
+/* A `Date` end is typed as digits over its own skeleton. The input is clear and
+ * the wrapper carries its ground, so the rest of `YYYY-MM-DD` shows through,
+ * faint, exactly where the next digits will land.
+ */
+.datefield {
+  position: relative;
+  display: block;
+  border-radius: 3px;
+  background: var(--paper);
+}
+
+.datefield input {
+  position: relative;
+  background: transparent;
+}
+
+.datefield__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  /* The input's border and padding, so each character sits under its slot. */
+  padding: 0 9px;
+  font-size: var(--t-s);
+  white-space: pre;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+.datefield__typed {
+  visibility: hidden;
+}
+
+.app--narrow .datefield__skeleton {
+  font-size: 16px;
+}
+
 /* --- notices -------------------------------------------------------------- */
 
 .notices {
