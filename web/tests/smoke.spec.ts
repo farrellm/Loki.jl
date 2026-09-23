@@ -505,6 +505,65 @@ test('types and picks the ends of a Date context', async ({ page }, info) => {
   }, name)
 })
 
+test('types and picks the ends of a DateTime context', async ({ page }, info) => {
+  await open(page)
+  const name = `intraday_${info.project.name}`
+  await page.evaluate(async (n) => {
+    await fetch(`/api/contexts/${n}`, { method: 'DELETE', credentials: 'same-origin' })
+  }, name)
+
+  await tap(page, page.getByTestId('session-window'))
+  await tap(page, page.getByTestId('context-add'))
+  await page.getByTestId('context-name').fill(name)
+  const start = page.getByTestId('context-start')
+  const stop = page.getByTestId('context-stop')
+  const toEnd = (field: typeof start) =>
+    field.evaluate((el: HTMLInputElement) =>
+      el.setSelectionRange(el.value.length, el.value.length),
+    )
+
+  // A date carries over into a DateTime at midnight rather than being cleared.
+  await page.getByTestId('context-timetype').selectOption('Date')
+  await start.focus()
+  await start.pressSequentially('20150301')
+  await page.getByTestId('context-timetype').selectOption('DateTime')
+  await expect(start).toHaveValue('2015-03-01T00:00:00')
+
+  // The T and the colons are the field's: Backspace steps back over them, and
+  // the time is typed as digits.
+  await start.focus()
+  await toEnd(start)
+  for (let i = 0; i < 6; i++) await start.press('Backspace')
+  await expect(start).toHaveValue('2015-03-01')
+  await start.pressSequentially('093000')
+  await expect(start).toHaveValue('2015-03-01T09:30:00')
+
+  // A picked day takes midnight when its end has no time, and keeps the time
+  // when it has one.
+  await stop.focus()
+  await tap(page, page.getByTestId('calendar-2015-03-05'))
+  await expect(stop).toHaveValue('2015-03-05T00:00:00')
+  await start.focus()
+  await tap(page, page.getByTestId('calendar-2015-03-02'))
+  await expect(start).toHaveValue('2015-03-02T09:30:00')
+
+  await tap(page, page.getByTestId('context-save'))
+  await expect(page.getByTestId(`context-${name}`)).toContainText(
+    '2015-03-02T09:30:00 → 2015-03-05T00:00:00',
+  )
+  const saved = await page.evaluate(async () =>
+    (await fetch('/api/contexts', { credentials: 'same-origin' })).json(),
+  )
+  expect(saved[name]).toEqual({
+    timetype: 'DateTime',
+    start: '2015-03-02T09:30:00',
+    stop: '2015-03-05T00:00:00',
+  })
+  await page.evaluate(async (n) => {
+    await fetch(`/api/contexts/${n}`, { method: 'DELETE', credentials: 'same-origin' })
+  }, name)
+})
+
 test('saves the analysis to a path on the server and opens it again', async ({
   page,
 }) => {
