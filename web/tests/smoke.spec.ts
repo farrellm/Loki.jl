@@ -718,12 +718,29 @@ test('highlights and indents Julia in a code field', async ({ page }) => {
   await page.keyboard.press('Enter')
   await page.keyboard.type('x')
   await page.keyboard.press('Enter')
+  await page.keyboard.type('if x')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('x')
+  await page.keyboard.press('Enter')
+  // A phone's keyboard commits a predicted word whole, so `elseif` has to dedent
+  // on its own and not only by way of the `else` typed on the way to it.
+  await page.keyboard.insertText('elseif')
+  await page.keyboard.type(' y')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('y')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('end')
+  await page.keyboard.press('Enter')
   await page.keyboard.type('end')
 
-  // Enter indents to the open block, four spaces a level, and `end` takes its
-  // line back out as it is typed.
+  // Enter indents to the open block, four spaces a level, and `elseif` and
+  // `end` take their lines back out as they are typed.
   const text = async () => (await field.locator('.cm-line').allInnerTexts()).join('\n')
-  await expect.poll(text).toBe('function f(x)\n    x\nend')
+  await expect
+    .poll(text)
+    .toBe(
+      'function f(x)\n    x\n    if x\n        x\n    elseif y\n        y\n    end\nend',
+    )
 
   // A keyword is drawn in a colour of its own, not the text's.
   const keyword = field.locator('.cm-line span', { hasText: /^function$/ })
@@ -734,7 +751,11 @@ test('highlights and indents Julia in a code field', async ({ page }) => {
   if (narrow(page)) return
   await page.keyboard.press('Enter')
   await page.keyboard.press('Tab')
-  await expect.poll(text).toBe('function f(x)\n    x\nend\n    ')
+  await expect
+    .poll(text)
+    .toBe(
+      'function f(x)\n    x\n    if x\n        x\n    elseif y\n        y\n    end\nend\n    ',
+    )
   await page.keyboard.press('Escape')
   await page.keyboard.press('Tab')
   await expect

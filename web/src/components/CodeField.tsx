@@ -67,10 +67,12 @@ export function CodeField({
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           StreamLanguage.define(julia),
           // Enter indents to the open blocks, four spaces a level as Julia does,
-          // and `end`, `else`, `catch` and `finally` dedent as they are typed
-          // (the mode's own list: `elseif` is not on it, so Shift-Tab it).
+          // and `end`, `else`, `elseif`, `catch` and `finally` dedent as they are
+          // typed. The mode's own list lacks `elseif`, which only dedented by way
+          // of its `else` — not when a phone's keyboard commits the whole word.
           indentUnit.of('    '),
           indentOnInput(),
+          EditorState.languageData.of(() => [{ indentOnInput: /^\s*elseif\b$/ }]),
           syntaxHighlighting(juliaHighlight),
           placeholder(hint ?? ''),
           EditorView.lineWrapping,
