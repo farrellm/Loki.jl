@@ -444,6 +444,67 @@ test('adds, edits and removes a context from the bar', async ({ page }, info) =>
   await expect(page.getByTestId('session-window')).toBeFocused()
 })
 
+test('types and picks the ends of a Date context', async ({ page }, info) => {
+  await open(page)
+  const name = `daily_${info.project.name}`
+  await page.evaluate(async (n) => {
+    await fetch(`/api/contexts/${n}`, { method: 'DELETE', credentials: 'same-origin' })
+  }, name)
+
+  await tap(page, page.getByTestId('session-window'))
+  await tap(page, page.getByTestId('context-add'))
+  await page.getByTestId('context-name').fill(name)
+  // The analysis window's Int64 ends mean nothing as dates, so they go.
+  await page.getByTestId('context-timetype').selectOption('Date')
+  const start = page.getByTestId('context-start')
+  const stop = page.getByTestId('context-stop')
+  await expect(start).toHaveValue('')
+
+  // Digits only: the dashes are the field's, and Backspace steps over them.
+  await start.focus()
+  await start.pressSequentially('20150301')
+  await expect(start).toHaveValue('2015-03-01')
+  for (let i = 0; i < 3; i++) await start.press('Backspace')
+  await expect(start).toHaveValue('2015-0')
+  await start.pressSequentially('214')
+  await expect(start).toHaveValue('2015-02-14')
+
+  // The calendar followed the typing to February; a day picked there sets the
+  // start, and hands the calendar to the stop.
+  await expect(page.getByTestId('calendar')).toContainText('February 2015')
+  await tap(page, page.getByTestId('calendar-2015-02-02'))
+  await expect(start).toHaveValue('2015-02-02')
+  await tap(page, page.getByLabel('Next month'))
+  await tap(page, page.getByTestId('calendar-2015-03-20'))
+  await expect(stop).toHaveValue('2015-03-20')
+  await expect(page.getByTestId('calendar-2015-03-20')).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  // The arrows walk the days, and Page Down turns the month under them.
+  await page.getByTestId('calendar-2015-03-20').press('ArrowRight')
+  await expect(page.getByTestId('calendar-2015-03-21')).toBeFocused()
+  await page.keyboard.press('PageDown')
+  await expect(page.getByTestId('calendar-2015-04-21')).toBeFocused()
+  await expect(page.getByTestId('calendar')).toContainText('April 2015')
+
+  await tap(page, page.getByTestId('context-save'))
+  await expect(page.getByTestId(`context-${name}`)).toContainText(
+    '2015-02-02 → 2015-03-20',
+  )
+  const saved = await page.evaluate(async () =>
+    (await fetch('/api/contexts', { credentials: 'same-origin' })).json(),
+  )
+  expect(saved[name]).toEqual({
+    timetype: 'Date',
+    start: '2015-02-02',
+    stop: '2015-03-20',
+  })
+  await page.evaluate(async (n) => {
+    await fetch(`/api/contexts/${n}`, { method: 'DELETE', credentials: 'same-origin' })
+  }, name)
+})
+
 test('saves the analysis to a path on the server and opens it again', async ({
   page,
 }) => {
