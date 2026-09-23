@@ -500,3 +500,87 @@ test('saves the analysis to a path on the server and opens it again', async ({
   // The directory stays: the session now points at this file, and the next
   // project to run against the same server opens its picker beside it.
 })
+
+test('picks the file a node reads, and where a sink writes', async ({ page }) => {
+  await open(page)
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'loki-e2e-'))
+  const csv = path.join(scratch, 'prices.csv')
+  fs.writeFileSync(csv, 'time,close\n1,100.5\n2,101.0\n3,100.75\n')
+  fs.writeFileSync(path.join(scratch, 'notes.md'), 'not a table\n')
+
+  const reader = await addNode(page, 'readcsv')
+  // The sink over the API: the palette would drop it where the reader already
+  // sits.
+  const writer: string = await page.evaluate(async () => {
+    const response = await fetch('/api/nodes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ kind: 'writecsv', params: {}, position: [360, 320] }),
+    })
+    return (await response.json()).id
+  })
+  await select(page, reader)
+  const field = page.getByTestId('path-field')
+  await expect(field).toHaveText('Choose a file to read')
+
+  // The path is the button: there is no box to type a long path into in a
+  // column this narrow, and the picker is where a path is typed.
+  await tap(page, field)
+  const picker = page.getByTestId('file-picker')
+  await expect(picker).toBeVisible()
+  await expect(picker).toContainText('Choose the file to read')
+  await tap(page, page.getByLabel('Type a path'))
+  const typed = page.getByTestId('file-path')
+  await typed.fill(scratch + '/')
+  await typed.press('Enter')
+
+  // A file the node cannot read is shown dimmed, not hidden, and cannot be
+  // chosen.
+  await expect(picker).toContainText('notes.md')
+  await expect(page.getByTestId('file-notes.md')).toHaveCount(0)
+  await tap(page, page.getByTestId('file-prices.csv'))
+  await expect(page.getByTestId('file-confirm')).toHaveText('Use this file')
+  await tap(page, page.getByTestId('file-confirm'))
+
+  // The field reads the path as the picker does, and focus is back where the
+  // picker was opened from.
+  await expect(picker).toBeHidden()
+  await expect(field).toContainText('prices.csv')
+  await expect(field).toHaveAttribute('title', csv)
+  await expect(field).toBeFocused()
+  await expect(page.getByTestId(`node-${reader}`)).toContainText('prices.csv')
+
+  // A CSV's columns are strings until typed, and the seeded context's time is
+  // an integer — set over the API, as the other specs set up state.
+  await page.evaluate(async (id) => {
+    await fetch(`/api/nodes/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        params: { types: 'Dict(:time => Int, :close => Float64)' },
+      }),
+    })
+  }, reader)
+  await tap(page, page.getByRole('button', { name: 'Run this node' }))
+  await expect(page.getByTestId(`node-${reader}`)).toHaveAttribute('data-status', 'ok')
+  await expect(page.getByTestId(`node-${reader}`)).toContainText('3 rows')
+
+  // A sink's path is somewhere to write: the picker saves, and it starts in no
+  // particular folder, so the name is typed with the path.
+  await select(page, writer)
+  await expect(field).toHaveText('Choose where to write')
+  await tap(page, field)
+  await expect(picker).toContainText('Choose the file to write')
+  await tap(page, page.getByLabel('Type a path'))
+  await typed.fill(path.join(scratch, 'prices.csv'))
+  await typed.press('Enter')
+  await expect(page.getByTestId('file-name')).toHaveValue('prices.csv')
+  // It would overwrite what the reader reads, and says so.
+  await expect(page.getByTestId('file-confirm')).toHaveText('Replace')
+  await page.getByTestId('file-name').fill('smoothed.csv')
+  await expect(page.getByTestId('file-confirm')).toHaveText('Use this file')
+  await tap(page, page.getByTestId('file-confirm'))
+  await expect(field).toContainText('smoothed.csv')
+})
