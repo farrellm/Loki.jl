@@ -1,53 +1,112 @@
-// A `Date` as the contexts band edits it: eight digits, with the dashes of
-// `YYYY-MM-DD` drawn in rather than typed, and the month grid a calendar lays
-// those digits out on.
+// A `Date` or `DateTime` as the contexts band edits it: digits, with the
+// separators of `YYYY-MM-DDThh:mm:ss` drawn in rather than typed, and the month
+// grid a calendar lays those digits out on.
 
-/** What an empty date field shows, and what is left of it once typing starts. */
-export const SKELETON = 'YYYY-MM-DD'
+/** How a time type's digits are grouped, and what separates the groups. */
+export interface Mask {
+  groups: number[]
+  seps: string[]
+  /** How many digits make a complete value; more may follow at the end. */
+  full: number
+  /** What an empty field shows. Past `full` digits, the rest of it appears. */
+  skeleton: string
+}
 
-const DIGITS = 8
+export const DATE_MASK: Mask = {
+  groups: [4, 2, 2],
+  seps: ['-', '-'],
+  full: 8,
+  skeleton: 'YYYY-MM-DD',
+}
+
+// Seconds are complete; milliseconds are there for a value that has them, and
+// are drawn only once they are typed into.
+export const DATETIME_MASK: Mask = {
+  groups: [4, 2, 2, 2, 2, 2, 3],
+  seps: ['-', '-', 'T', ':', ':', '.'],
+  full: 14,
+  skeleton: 'YYYY-MM-DDThh:mm:ss.sss',
+}
+
+/** The mask a time type is typed through, if it has one. */
+export function maskFor(timetype: string): Mask | null {
+  if (timetype === 'Date') return DATE_MASK
+  if (timetype === 'DateTime') return DATETIME_MASK
+  return null
+}
+
+const maxDigits = (mask: Mask) => mask.groups.reduce((a, b) => a + b, 0)
 
 const digitsOf = (text: string) => text.replace(/\D/g, '')
 
 /** How many digits come before `pos` in `text`. */
 const digitIndex = (text: string, pos: number) => digitsOf(text.slice(0, pos)).length
 
-/** Where the caret goes after the `n`th digit of a formatted date. */
-const caretAt = (n: number) => n + (n > 4 ? 1 : 0) + (n > 6 ? 1 : 0)
+// A separator is written only once the group after it has started, so the text
+// is always a prefix of a value: `2015`, `2015-0`, `2015-03-01T0`.
+function format(mask: Mask, d: string): string {
+  let out = ''
+  let at = 0
+  mask.groups.forEach((size, i) => {
+    if (at >= d.length) return
+    if (i > 0) out += mask.seps[i - 1]
+    out += d.slice(at, at + size)
+    at += size
+  })
+  return out
+}
 
-// A dash is written only once the group after it has started, so the text is
-// always a prefix of a date: `2015`, `2015-0`, `2015-03-0`.
-function format(d: string): string {
-  if (d.length <= 4) return d
-  if (d.length <= 6) return `${d.slice(0, 4)}-${d.slice(4)}`
-  return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`
+/** Where the caret goes after the `n`th digit. */
+function caretAt(mask: Mask, n: number): number {
+  let seps = 0
+  let edge = 0
+  for (const size of mask.groups.slice(0, -1)) {
+    edge += size
+    if (n > edge) seps += 1
+  }
+  return n + seps
+}
+
+/** What the field draws faint after the text typed so far. */
+export function skeletonRest(mask: Mask, text: string): string {
+  const complete = format(mask, '0'.repeat(mask.full)).length
+  const shown = text.length > complete ? mask.skeleton : mask.skeleton.slice(0, complete)
+  return shown.slice(text.length)
 }
 
 /**
- * One edit to a date field. `prev` is what it held, `next` and `caret` what
+ * One edit to a masked field. `prev` is what it held, `next` and `caret` what
  * the browser made of the keystroke, paste or cut, and `inputType` the input
- * event's. The dashes cannot be typed or deleted: deleting one takes the digit
- * beyond it instead, and a digit typed into a full field overwrites the one
- * after the caret rather than pushing the last off the end.
+ * event's. The separators cannot be typed or deleted: deleting one takes the
+ * digit beyond it instead. A digit typed into a complete value overwrites the
+ * one after the caret rather than pushing the rest along, except at the end,
+ * where a `DateTime` goes on into milliseconds.
  */
 export function maskDate(
   prev: string,
   next: string,
   caret: number,
   inputType?: string,
+  mask: Mask = DATE_MASK,
 ): { text: string; caret: number } {
+  const before = digitsOf(prev)
+  const max = maxDigits(mask)
   let d = digitsOf(next)
   let at = digitIndex(next, caret)
-  if (d === digitsOf(prev) && next.length < prev.length) {
+  if (d === before && next.length < prev.length) {
     if (inputType === 'deleteContentForward') d = d.slice(0, at) + d.slice(at + 1)
     else if (at > 0) {
       d = d.slice(0, at - 1) + d.slice(at)
       at -= 1
     }
   }
-  if (d.length > DIGITS) d = d.slice(0, at) + d.slice(at + d.length - DIGITS)
-  d = d.slice(0, DIGITS)
-  return { text: format(d), caret: caretAt(Math.min(at, d.length)) }
+  const inserted = d.length - before.length
+  if (inserted > 0 && before.length >= mask.full && at < d.length) {
+    d = d.slice(0, at) + d.slice(at + inserted)
+  }
+  if (d.length > max) d = d.slice(0, at) + d.slice(at + d.length - max)
+  d = d.slice(0, max)
+  return { text: format(mask, d), caret: caretAt(mask, Math.min(at, d.length)) }
 }
 
 /** A month: `m` runs from 1 to 12. */

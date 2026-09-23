@@ -734,14 +734,16 @@ A single-page app written in TypeScript with Vite and React:
   redraws dashed at the values being typed, and a value that does not parse,
   a start after the stop, or a name that is not a Julia identifier (the
   exporter writes contexts as `const` bindings) is refused there, before
-  anything is sent; changing the time type clears an end that means nothing in
-  the new one. A `Date` end is typed as digits over a faint `YYYY-MM-DD`
-  skeleton whose dashes are the field's own — never typed, and stepped over
-  rather than deleted — and one calendar under the pair sets whichever end was
-  focused last, drawing the window across its days with the timeline's line
-  and ticks; typing a date moves it to that month. Removing takes a second tap
-  and first says which nodes still name the context; `analysis` has no
-  remove.
+  anything is sent. Changing the time type carries an end between `Date` and
+  `DateTime` (midnight added, or the time dropped) and clears one that means
+  nothing in the new type. A `Date` or `DateTime` end is typed as digits over a
+  faint `YYYY-MM-DD` or `YYYY-MM-DDThh:mm:ss` skeleton whose separators are the
+  field's own — never typed, and stepped over rather than deleted; a DateTime
+  typed on past its seconds takes milliseconds — and one calendar under the
+  pair sets whichever end was focused last, drawing the window across its days
+  with the timeline's line and ticks; typing a date moves it to that month.
+  Removing takes a second tap and first says which nodes still name the
+  context; `analysis` has no remove.
 - **File picker** — a path on the machine Loki is running on, over
   `/api/files`. A band hanging off the session bar rather than a floating
   dialog, with the path as its subject: one line that is at once the

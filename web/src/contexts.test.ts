@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   check,
+  convert,
   defaultTimetype,
   extent,
   ordered,
@@ -27,6 +28,16 @@ describe('parseTime', () => {
     expect(parseTime('Date', '2015-1-1')).toBeNull()
     expect(parseTime('DateTime', '2015-01-01T24:00')).toBeNull()
     expect(parseTime('Time', '12:00')).toBeNull()
+  })
+})
+
+describe('convert', () => {
+  it('carries an end between Date and DateTime, and clears what will not parse', () => {
+    expect(convert('Date', 'DateTime', '2015-03-01')).toBe('2015-03-01T00:00:00')
+    expect(convert('Date', 'DateTime', '2015-03')).toBe('2015-03')
+    expect(convert('DateTime', 'Date', '2015-03-01T09:30:00')).toBe('2015-03-01')
+    expect(convert('Int64', 'Date', '401')).toBe('')
+    expect(convert('Int64', 'Float64', '401')).toBe('401')
   })
 })
 

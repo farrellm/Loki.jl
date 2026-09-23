@@ -1,19 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { addDays, addMonths, maskDate, monthGrid, viewOf } from './dates'
+import {
+  addDays,
+  addMonths,
+  DATETIME_MASK,
+  maskDate,
+  monthGrid,
+  skeletonRest,
+  viewOf,
+  type Mask,
+} from './dates'
 
 // Type `keys` into a field holding `text`, one at a time at the caret, as a
 // browser would before the mask sees it.
-function type(text: string, caret: number, keys: string) {
+function type(text: string, caret: number, keys: string, mask?: Mask) {
   for (const key of keys) {
     const next = text.slice(0, caret) + key + text.slice(caret)
-    ;({ text, caret } = maskDate(text, next, caret + 1, 'insertText'))
+    ;({ text, caret } = maskDate(text, next, caret + 1, 'insertText', mask))
   }
   return { text, caret }
 }
 
-function backspace(text: string, caret: number) {
+function backspace(text: string, caret: number, mask?: Mask) {
   const next = text.slice(0, caret - 1) + text.slice(caret)
-  return maskDate(text, next, caret - 1, 'deleteContentBackward')
+  return maskDate(text, next, caret - 1, 'deleteContentBackward', mask)
 }
 
 function del(text: string, caret: number) {
@@ -59,6 +68,47 @@ describe('maskDate', () => {
   it('overwrites rather than inserts once the field is full', () => {
     expect(type('2015-03-01', 5, '1')).toEqual({ text: '2015-13-01', caret: 6 })
     expect(type('2015-03-01', 0, '1999')).toEqual({ text: '1999-03-01', caret: 4 })
+  })
+})
+
+describe('maskDate on a DateTime', () => {
+  const dt = DATETIME_MASK
+
+  it('writes the T and the colons as well as the dashes', () => {
+    expect(type('', 0, '2015030109', dt)).toEqual({ text: '2015-03-01T09', caret: 13 })
+    expect(type('', 0, '20150301093000', dt)).toEqual({
+      text: '2015-03-01T09:30:00',
+      caret: 19,
+    })
+    const pasted = '2015-03-01 09:30:00'
+    expect(maskDate('', pasted, pasted.length, 'insertFromPaste', dt).text).toBe(
+      '2015-03-01T09:30:00',
+    )
+  })
+
+  it('steps back over a T or a colon', () => {
+    expect(backspace('2015-03-01T09:30', 14, dt)).toEqual({
+      text: '2015-03-01T03:0',
+      caret: 12,
+    })
+    // The digits after it close up, as they do behind any deleted digit.
+    expect(backspace('2015-03-01T09', 11, dt)).toEqual({
+      text: '2015-03-00T9',
+      caret: 9,
+    })
+  })
+
+  it('overwrites inside a complete value, and runs on into milliseconds at its end', () => {
+    const full = '2015-03-01T09:30:00'
+    expect(type(full, 11, '1', dt)).toEqual({ text: '2015-03-01T19:30:00', caret: 12 })
+    expect(type(full, 19, '5', dt)).toEqual({ text: '2015-03-01T09:30:00.5', caret: 21 })
+    expect(type(full, 19, '12345', dt).text).toBe('2015-03-01T09:30:00.123')
+  })
+
+  it('draws the skeleton to the seconds, and the milliseconds once they start', () => {
+    expect(skeletonRest(dt, '2015-03-01T0')).toBe('h:mm:ss')
+    expect(skeletonRest(dt, '2015-03-01T09:30:00')).toBe('')
+    expect(skeletonRest(dt, '2015-03-01T09:30:00.5')).toBe('ss')
   })
 })
 

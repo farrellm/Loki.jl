@@ -4,8 +4,8 @@ import {
   check,
   defaultTimetype,
   extent,
+  convert,
   ordered,
-  parseTime,
   PLACEHOLDERS,
   span,
   TIMETYPES,
@@ -13,6 +13,7 @@ import {
   type Draft,
   type TimeType,
 } from '../contexts'
+import { maskFor } from '../dates'
 import { trapTab } from '../focus'
 import type { SessionStore } from '../store'
 import { Calendar } from './Calendar'
@@ -218,7 +219,10 @@ export function Contexts({
     const shown = problem ?? (touched && !checked.ok ? checked.problem : null)
     const [startHint, stopHint] = PLACEHOLDERS[draft.timetype as TimeType] ?? ['', '']
     const numeric = draft.timetype === 'Int64' || draft.timetype === 'Float64'
-    const date = draft.timetype === 'Date'
+    const mask = maskFor(draft.timetype)
+    // A DateTime is 19 characters: on a phone each end takes the whole line,
+    // since a field that scrolled would slide out from over its skeleton.
+    const endClass = `contexts__field${draft.timetype === 'DateTime' ? ' contexts__field--wide' : ''}`
     return (
       <form
         className="contexts__form"
@@ -250,12 +254,13 @@ export function Contexts({
               value={draft.timetype}
               data-testid="context-timetype"
               onChange={(e) => {
-                // An end that means nothing in the new type is cleared rather
-                // than carried over: `401` is no start for a Date.
-                const timetype = e.target.value
-                const keep = (text: string) =>
-                  parseTime(timetype, text) === null ? '' : text
-                edit({ timetype, start: keep(draft.start), stop: keep(draft.stop) })
+                const from = draft.timetype
+                const to = e.target.value
+                edit({
+                  timetype: to,
+                  start: convert(from, to, draft.start),
+                  stop: convert(from, to, draft.stop),
+                })
               }}
             >
               {TIMETYPES.map((t) => (
@@ -270,10 +275,11 @@ export function Contexts({
               )}
             </select>
           </label>
-          <label className="contexts__field">
+          <label className={endClass}>
             <span>Start</span>
-            {date ? (
+            {mask !== null ? (
               <DateField
+                mask={mask}
                 value={draft.start}
                 active={end === 'start'}
                 autoFocus={!fresh}
@@ -296,10 +302,11 @@ export function Contexts({
               />
             )}
           </label>
-          <label className="contexts__field">
+          <label className={endClass}>
             <span>Stop</span>
-            {date ? (
+            {mask !== null ? (
               <DateField
+                mask={mask}
                 value={draft.stop}
                 active={end === 'stop'}
                 testid="context-stop"
@@ -324,7 +331,7 @@ export function Contexts({
 
         {/* Picking the start hands the calendar to the stop, without moving
             focus there: on a phone that would open a keyboard nobody asked for. */}
-        {date && (
+        {draft.timetype === 'Date' && (
           <Calendar
             start={draft.start}
             stop={draft.stop}
