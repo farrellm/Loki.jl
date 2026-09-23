@@ -121,8 +121,10 @@ Most kinds are an `OpKind`: data — a name, a palette category, ports, a list o
 `paramschema` and `validateparams` are derived. A `Param`'s type is JSON's
 (`string`, `integer`, `number`, `boolean`, `enum`, `integers`) or Loki's own —
 `column`, `columns`, `code` (source text), `context`, `table` (names in the
-session) and `summarizers` — carried in the schema as an `x-loki` annotation
-the inspector keys its column pickers and code editors on. Parameter values
+session), `summarizers` and `path` (a file on the machine Loki runs on, with
+the suffixes the file picker offers in `x-loki-suffixes`) — carried in the
+schema as an `x-loki` annotation the inspector keys its column pickers, code
+editors and file picker on. Parameter values
 stay JSON-like, so a graph saves and travels as data.
 
 `build` calls the real operator constructors, so a bad parameter is reported

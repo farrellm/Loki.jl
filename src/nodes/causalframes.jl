@@ -371,7 +371,11 @@ emittablesource(params::AbstractDict) =
 
 # --- files --------------------------------------------------------------------------
 
-const PATH = Param("path", :string; required = true)
+# A path on the machine Loki runs on, which the browser picks with its file
+# picker. The suffixes only say which files it offers; any path is accepted.
+const CSVPATH = Param("path", :path; required = true, suffixes = [".csv", ".tsv", ".txt"])
+const PARQUETPATH = Param("path", :path; required = true, suffixes = [".parquet"])
+const JLSPATH = Param("path", :path; required = true, suffixes = [".jls"])
 const QUEUE = Param("queue", :integer; default = 1)
 const BACKEND = Param("backend", :enum; choices = ["auto", "duckdb", "parquet2"],
     default = "auto")
@@ -384,7 +388,7 @@ register_nodekind!(
     OpKind("readcsv"; category = "files",
         doc = "Read a CSV file; every column is a String unless `types` says otherwise.",
         params = [
-            PATH,
+            CSVPATH,
             Param("types", :code;
                 description = "e.g. `Dict(:time => DateTime, :close => Float64)`"),
             Param(
@@ -419,7 +423,7 @@ register_nodekind!(
 register_nodekind!(
     OpKind("writecsv"; category = "files", write = true,
         doc = "Write the stream to a CSV file as it flows by.",
-        inputs = ONEINPUT, params = [PATH, QUEUE],
+        inputs = ONEINPUT, params = [CSVPATH, QUEUE],
         build = (params, inputs, env) ->
             (; out = inputs[:in] |> writecsv(params["path"]; queue = params["queue"])),
         emit = (params, inputs) ->
@@ -432,7 +436,7 @@ register_nodekind!(
 register_nodekind!(
     OpKind("readparquet"; category = "files",
         doc = "Read a parquet file.",
-        params = [PATH, Param("time", :code), Param("rename", :code), SORT, CLOSED,
+        params = [PARQUETPATH, Param("time", :code), Param("rename", :code), SORT, CLOSED,
             BACKEND],
         build = (params, inputs, env) ->
             (;
@@ -455,7 +459,7 @@ register_nodekind!(
         doc = "Write the stream to a parquet file as it flows by.",
         inputs = ONEINPUT,
         params = [
-            PATH,
+            PARQUETPATH,
             QUEUE,
             Param("rowgroupsize", :integer; default = 1_000_000),
             BACKEND,
@@ -479,7 +483,7 @@ register_nodekind!(
 register_nodekind!(
     OpKind("readjls"; category = "files",
         doc = "Read a file written by writejls.",
-        params = [PATH, CLOSED],
+        params = [JLSPATH, CLOSED],
         build = (params, inputs, env) ->
             (; out = readjls(params["path"]; closed = params["closed"])),
         emit = (params, inputs) ->
@@ -492,7 +496,7 @@ register_nodekind!(
 register_nodekind!(
     OpKind("writejls"; category = "files", write = true,
         doc = "Write the stream through Julia's Serialization as it flows by.",
-        inputs = ONEINPUT, params = [PATH, QUEUE],
+        inputs = ONEINPUT, params = [JLSPATH, QUEUE],
         build = (params, inputs, env) ->
             (; out = inputs[:in] |> writejls(params["path"]; queue = params["queue"])),
         emit = (params, inputs) ->

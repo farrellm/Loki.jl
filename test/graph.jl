@@ -74,6 +74,18 @@
           Dict("type" => "integer", "default" => 3, "description" => "row count")
     @test schema["properties"]["mode"]["enum"] == ["a", "b"]
     @test schema["properties"]["expr"]["x-loki"] == "code"
+
+    # A file path is a string the browser picks with its file picker, which
+    # offers the files the suffixes name.
+    csv = Loki.nodekind("readcsv")
+    @test Loki.paramschema(csv)["properties"]["path"] == Dict("type" => "string",
+        "x-loki" => "path", "x-loki-suffixes" => [".csv", ".tsv", ".txt"])
+    @test Loki.paramschema(Loki.nodekind("writejls"))["properties"]["path"]["x-loki-suffixes"] ==
+          [".jls"]
+    @test Loki.validateparams(csv, Dict("path" => "a.dat"))["path"] == "a.dat"
+    @test_throws ArgumentError Loki.validateparams(csv, Dict("path" => 1))
+    @test !haskey(Loki.jsonschema(Loki.Param("p", :path)), "x-loki-suffixes")
+    @test_throws ArgumentError Loki.Param("p", :string; suffixes = [".csv"])
     @test Loki.paramschema(Loki.nodekind("test_required"))["required"] == ["column"]
 
     built = Loki.build(source, Dict("rows" => 2), Dict{Symbol,Any}(), nothing)
