@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { maskDate } from './dates'
+import { addDays, addMonths, maskDate, monthGrid, viewOf } from './dates'
 
 // Type `keys` into a field holding `text`, one at a time at the caret, as a
 // browser would before the mask sees it.
@@ -59,5 +59,33 @@ describe('maskDate', () => {
   it('overwrites rather than inserts once the field is full', () => {
     expect(type('2015-03-01', 5, '1')).toEqual({ text: '2015-13-01', caret: 6 })
     expect(type('2015-03-01', 0, '1999')).toEqual({ text: '1999-03-01', caret: 4 })
+  })
+})
+
+describe('the calendar', () => {
+  it('lays a month out Monday first', () => {
+    // 1 March 2015 was a Sunday.
+    const march = monthGrid({ y: 2015, m: 3 })
+    expect(march[0]).toEqual([null, null, null, null, null, null, 1])
+    expect(march.flat().filter((d) => d !== null)).toHaveLength(31)
+    expect(march.every((w) => w.length === 7)).toBe(true)
+    expect(Math.max(...monthGrid({ y: 2016, m: 2 }).flat().map(Number))).toBe(29)
+    expect(Math.max(...monthGrid({ y: 2015, m: 2 }).flat().map(Number))).toBe(28)
+  })
+
+  it('follows what has been typed so far', () => {
+    expect(viewOf('201')).toBeNull()
+    expect(viewOf('2015')).toEqual({ y: 2015, m: null })
+    expect(viewOf('2015-0')).toEqual({ y: 2015, m: null })
+    expect(viewOf('2015-03')).toEqual({ y: 2015, m: 3 })
+    expect(viewOf('2015-19')).toEqual({ y: 2015, m: 12 })
+  })
+
+  it('steps across months and years', () => {
+    expect(addMonths({ y: 2015, m: 12 }, 1)).toEqual({ y: 2016, m: 1 })
+    expect(addMonths({ y: 2015, m: 1 }, -12)).toEqual({ y: 2014, m: 1 })
+    expect(addDays('2015-02-28', 1)).toBe('2015-03-01')
+    expect(addDays('2016-03-01', -1)).toBe('2016-02-29')
+    expect(addDays('0050-01-01', -1)).toBe('0049-12-31')
   })
 })

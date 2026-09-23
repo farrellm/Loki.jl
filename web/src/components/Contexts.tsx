@@ -15,6 +15,7 @@ import {
 } from '../contexts'
 import { trapTab } from '../focus'
 import type { SessionStore } from '../store'
+import { Calendar } from './Calendar'
 import { DateField } from './DateField'
 
 // The named contexts: the windows of time a node can be evaluated over.
@@ -64,6 +65,8 @@ export function Contexts({
   const [problem, setProblem] = useState<string | null>(null)
   const [removing, setRemoving] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Which end of a `Date` window the calendar sets: the field last focused.
+  const [end, setEnd] = useState<'start' | 'stop'>('start')
 
   // The context being edited can vanish under us — the agent removed it, or
   // the session was opened from a file.
@@ -83,6 +86,7 @@ export function Contexts({
     setTouched(false)
     setProblem(null)
     setRemoving(false)
+    setEnd('start')
     if (next === null) return
     if (next.fresh) return setDraft(blank())
     const ctx = contexts[next.name]
@@ -271,8 +275,10 @@ export function Contexts({
             {date ? (
               <DateField
                 value={draft.start}
+                active={end === 'start'}
                 autoFocus={!fresh}
                 testid="context-start"
+                onFocus={() => setEnd('start')}
                 onChange={(start) => edit({ start })}
               />
             ) : (
@@ -295,7 +301,9 @@ export function Contexts({
             {date ? (
               <DateField
                 value={draft.stop}
+                active={end === 'stop'}
                 testid="context-stop"
+                onFocus={() => setEnd('stop')}
                 onChange={(stop) => edit({ stop })}
               />
             ) : (
@@ -313,6 +321,20 @@ export function Contexts({
             )}
           </label>
         </div>
+
+        {/* Picking the start hands the calendar to the stop, without moving
+            focus there: on a phone that would open a keyboard nobody asked for. */}
+        {date && (
+          <Calendar
+            start={draft.start}
+            stop={draft.stop}
+            end={end}
+            onPick={(day) => {
+              edit(end === 'start' ? { start: day } : { stop: day })
+              if (end === 'start') setEnd('stop')
+            }}
+          />
+        )}
 
         {shown !== null && (
           <p className="contexts__problem" role="alert" data-testid="context-problem">

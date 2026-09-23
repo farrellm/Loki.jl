@@ -737,7 +737,9 @@ A single-page app written in TypeScript with Vite and React:
   anything is sent; changing the time type clears an end that means nothing in
   the new one. A `Date` end is typed as digits over a faint `YYYY-MM-DD`
   skeleton whose dashes are the field's own — never typed, and stepped over
-  rather than deleted. Removing takes a second tap
+  rather than deleted — and one calendar under the pair sets whichever end was
+  focused last, drawing the window across its days with the timeline's line
+  and ticks; typing a date moves it to that month. Removing takes a second tap
   and first says which nodes still name the context; `analysis` has no
   remove.
 - **File picker** — a path on the machine Loki is running on, over

@@ -10,11 +10,16 @@ import { maskDate, SKELETON } from '../dates'
 export function DateField({
   value,
   onChange,
+  onFocus,
+  active,
   autoFocus,
   testid,
 }: {
   value: string
   onChange: (text: string) => void
+  onFocus: () => void
+  /** The end the calendar below is setting. */
+  active: boolean
   autoFocus?: boolean
   testid: string
 }) {
@@ -29,7 +34,7 @@ export function DateField({
   })
 
   return (
-    <span className="datefield">
+    <span className={`datefield${active ? ' datefield--active' : ''}`}>
       <span className="datefield__skeleton mono" aria-hidden="true">
         <span className="datefield__typed">{value}</span>
         {SKELETON.slice(value.length)}
@@ -45,6 +50,7 @@ export function DateField({
         autoCorrect="off"
         spellCheck={false}
         data-testid={testid}
+        onFocus={onFocus}
         onChange={(e) => {
           const el = e.target
           const next = maskDate(
