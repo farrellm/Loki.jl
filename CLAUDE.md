@@ -156,7 +156,8 @@ same reason StateSpaceModels is `import StateSpaceModels as SSM`: its
 - A new exported name also goes in DESIGN.md's export list, an `@docs` block
   under `docs/src/`, and `src/precompile.jl`'s workload.
 - `web/src/theme.css` and `app.css`'s header are the design contract: six
-  functional colour tokens, hairlines rather than cards, exactly one shadow
+  functional colour tokens (plus the `--code-*` syntax tokens, which only the
+  code editor uses), hairlines rather than cards, exactly one shadow
   (the bottom sheet) and one animation (the run sweep), 3px radii. New UI
   extends it rather than adding tokens or floating a card.
 - Every operator gets a node kind in `src/nodes/` (an `OpKind` with `Param`

@@ -704,3 +704,61 @@ test('picks the file a node reads, and where a sink writes', async ({ page }) =>
   await tap(page, page.getByTestId('file-confirm'))
   await expect(field).toContainText('smoothed.csv')
 })
+
+test('highlights and indents Julia in a code field', async ({ page }) => {
+  await open(page)
+  const id = await addNode(page, 'ema')
+  await select(page, id)
+
+  const field = page.getByTestId('codefield')
+  const content = field.locator('.cm-content')
+  if (narrow(page)) await content.tap()
+  else await content.click()
+  await page.keyboard.type('function f(x)')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('x')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('if x')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('x')
+  await page.keyboard.press('Enter')
+  // A phone's keyboard commits a predicted word whole, so `elseif` has to dedent
+  // on its own and not only by way of the `else` typed on the way to it.
+  await page.keyboard.insertText('elseif')
+  await page.keyboard.type(' y')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('y')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('end')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('end')
+
+  // Enter indents to the open block, four spaces a level, and `elseif` and
+  // `end` take their lines back out as they are typed.
+  const text = async () => (await field.locator('.cm-line').allInnerTexts()).join('\n')
+  await expect
+    .poll(text)
+    .toBe(
+      'function f(x)\n    x\n    if x\n        x\n    elseif y\n        y\n    end\nend',
+    )
+
+  // A keyword is drawn in a colour of its own, not the text's.
+  const keyword = field.locator('.cm-line span', { hasText: /^function$/ })
+  const colour = (el: Element) => getComputedStyle(el).color
+  expect(await keyword.evaluate(colour)).not.toBe(await content.evaluate(colour))
+
+  // Tab indents rather than leaving the field, and Escape then Tab still leaves.
+  if (narrow(page)) return
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Tab')
+  await expect
+    .poll(text)
+    .toBe(
+      'function f(x)\n    x\n    if x\n        x\n    elseif y\n        y\n    end\nend\n    ',
+    )
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Tab')
+  await expect
+    .poll(() => content.evaluate((el) => el.contains(document.activeElement)))
+    .toBe(false)
+})
