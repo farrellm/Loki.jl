@@ -65,7 +65,7 @@ jobs:
       # Playwright's webServer wait, which prints nothing until the server is up.
       - run: julia --color=yes --project -e 'using Pkg; Pkg.precompile(); using Loki'
         timeout-minutes: 15
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
